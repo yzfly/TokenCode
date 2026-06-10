@@ -21,6 +21,7 @@
 - **并行竞赛模式（`/race`）**：`/race <N> <任务>`（N≤1000）——每个 racer 在自己的 git worktree（独立分支）里独立解题，工具被 per-registry 根硬隔离在自己写空间；窗口化并发（`race.concurrency`，默认 8）；裁判流水线 = 客观粗筛（空 diff / `race.check` 命令淘汰，零 token）→ 并行 LLM 打分 → top-4 决赛；排行榜出来后 `/race apply` 确认应用冠军 diff（不自动 commit）、`/race discard` 放弃；冠军分支保留可追溯；Ctrl+C 全员停手并清理。
 - **子代理与工作流**：agent 工具委托隔离上下文子代理（并行安全）、workflow 工具跑 goja JS 编排脚本；自定义代理从 `.tokencode/agents`（兼容 `.claude/agents`）发现。
 - **多模型**：内置协议转换层，协议按协议命名——`anthropic` / `openai` / `google` 三种 codec（旧值 `openai-chat` 兼容归一化）；`~/.config/tokencode/config.json` 注册 provider（DeepSeek/Kimi/Qwen/OpenRouter/Ollama/Gemini……），`-model 别名` 或 `-model provider/model-id` 切换；无 config 时默认经 DeepSeek 接入（`deepseek-v4-pro[1m]`），行为与之前一致。
+- **模型目录与 coding plan 开箱即用**：embed 一份 [models.dev](https://models.dev) 裁剪快照（141 个 provider），Kimi for Coding / 智谱 GLM / 阿里百炼 / MiniMax / 腾讯混元等国内 coding plan 零配置可选；`tokencode models` 浏览、`tokencode auth login <provider>` 存 key（auth.json，0600）；解析顺序 config 别名 → config provider → 内置目录 → 直传。
 - **命令体系**：命令注册表驱动的 `/help /model /skills /mcp /plan /review /yolo /exit`；输入 `/` 弹补全菜单（前缀优先、↑↓ 选、Tab 补全、Enter 执行、Esc 关）；未知命令不发模型、给就近建议；`//` 转义发普通消息。`/model <名>` 运行时热切换模型。需求全图见 `docs/requirements/tui-commands.md`（P1/P2 排好了队）。
 - **Skills（M3 lite）**：扫 `.tokencode/skills` 并兼容 `.claude/skills`、`.agents/skills`，启动只读 frontmatter，`/技能名 [参数]` 调用时才读正文（渐进披露）；$ARGUMENTS 替换对齐 Claude Code 语义。
 - **MCP（最小 stdio client）**：config.json 的 `"mcp"` 字段配置 server，后台连接绝不阻塞启动；工具以 `mcp__server__tool` 注册进 registry，对 agent 与内置工具零差别；`/mcp` 看状态、`/mcp reconnect <名>` 重连；退出硬 kill 子进程。
@@ -39,7 +40,9 @@
 cmd/tokencode/main.go      解析 flag/env/config → 按协议构造 client → tui.Run
 internal/llm/              LLM interface（统一 IR）+ anthropic / openai / google 三协议 codec
                            + Streamer 流式接口与共用 SSE 读取器
-internal/config/           模型注册表 + MCP server 配置（JSON）
+internal/config/           模型注册表 + MCP server 配置（JSON）+ 内置目录解析
+internal/catalog/          embed 的 models.dev provider 目录（协议映射 / 端点 / key 探测）
+internal/auth/             provider 凭据存储（auth.json，0600，`tokencode auth` 子命令）
 internal/session/          会话 JSONL 持久化（Create/Open/Append/Load/Latest）
 internal/skill/            Agent Skills 加载器（frontmatter 索引 + 正文懒加载）
 internal/mcp/              MCP stdio client（JSON-RPC 握手/工具发现/调用 + Manager）

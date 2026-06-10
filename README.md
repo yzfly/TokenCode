@@ -58,9 +58,21 @@ Shift+Tab 循环切换，或用 `/plan` `/review` `/auto` `/yolo`；`/exit` 或 
 | `-resume` | — | 按会话 id 恢复 |
 | `-no-session` | `false` | 本次会话不落盘 |
 
-### 接入其它模型
+### 模型与国内 Coding Plan 开箱即用
 
-不写 config 时行为与上面完全一致（ANTHROPIC_* 环境变量 + DeepSeek 端点）。要接入更多模型，在 `~/.config/tokencode/config.json`（或 `$XDG_CONFIG_HOME/tokencode/config.json`）注册 provider：
+内置 [models.dev](https://models.dev) 目录快照（141 个 provider），**Kimi for Coding、智谱 GLM Coding Plan、阿里百炼 Coding Plan、MiniMax、DeepSeek、腾讯混元**等国内模型与包月套餐无需写任何配置：
+
+```bash
+tokencode models coding              # 浏览目录（按关键词过滤）
+tokencode auth login kimi-for-coding # 粘贴 key，存入 auth.json（0600）
+tokencode -model kimi-for-coding/k2p6
+```
+
+key 也可走环境变量（如 `KIMI_API_KEY`、`ZHIPU_API_KEY`，目录里每个条目都声明了探测变量）。目录快照用 `scripts/update-catalog.sh` 更新，`TOKENCODE_CATALOG` 可指向私有镜像。
+
+### 手工注册 provider（config.json）
+
+不写 config 时行为与上面完全一致（ANTHROPIC_* 环境变量 + DeepSeek 端点）。要精确控制端点/协议，在 `~/.config/tokencode/config.json`（或 `$XDG_CONFIG_HOME/tokencode/config.json`）注册 provider（同名条目压过内置目录）：
 
 ```json
 {
@@ -111,8 +123,8 @@ go vet ./...
 - [x] streaming、会话持久化（`-continue`/`-resume`）、多 provider（anthropic/openai/google 三协议）
 - [x] 子代理（agent 工具）+ 动态工作流（workflow JS 编排）+ 联网搜索（Tavily/DDG/Mojeek）
 - [x] A · 横向爆破（竞赛）v1：`/race` 派 N 个、worktree 隔离、裁判择优 ——*打磨中：败者提前退钱、投票裁判、预算建模*
+- [x] 模型与国内 coding plan 开箱即用（内置 models.dev 目录 + `tokencode auth login`）
 - [ ] 团队接入：IM 通道体系（飞书/钉钉长连接 → 微信扫码/企微），每成员独立工作空间
-- [ ] 模型与国内 coding plan 开箱即用（内置 provider 目录 + `auth login`）
 - [ ] SDK/CLI 可编程化（headless `-p`、`serve`、Go SDK）与 WebUI 用量大盘
 - [ ] 工作区权威（单写者）+ 三方合并：B · 协作模式的并行写
 
