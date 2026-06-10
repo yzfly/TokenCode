@@ -1,19 +1,31 @@
 # TokenCode
 
-> **为并行而生的 Agent 运行时。** 当前阶段：一个极简的 Go 终端编码 agent，内置协议转换层、可接入任意模型，作为后续并行运行时的底座。路线见 [`ROADMAP.md`](ROADMAP.md)。
+> **为并行而生、对团队友好的 Agent 引擎。** 当前形态：一个 Go 终端编码 agent——单 agent 底座 + TUI 之上，已长出第一种并行模式 `/race`（最多 1000 个 agent 隔离竞赛解题、裁判择优）。方向：把编码 agent 从「个人终端工具」变成「团队基础设施」。路线见 [`ROADMAP.md`](ROADMAP.md)。
 
 ![TokenCode TUI 截图](assets/screenshot.png)
 
 ## 它是什么
 
-一个跑在终端里的编码 agent：你说一句话，它用 `read` / `write` / `edit` / `bash` 四个工具读改文件、跑命令，循环直到把活干完。流式输出、会话自动落盘（`-continue` 随时接着聊）。核心是标准的 tool-use 循环：
+一个跑在终端里的编码 agent：你说一句话，它用 `read` / `write` / `edit` / `bash` / `websearch` / `webfetch` 工具读改文件、跑命令、查资料，循环直到把活干完。流式输出、会话自动落盘（`-continue` 随时接着聊）、可委托子代理与 JS 工作流编排。核心是标准的 tool-use 循环：
 
 ```
 用户消息 → LLM(带工具) → tool_use → 执行 → tool_result 回灌 → 循环 → 结束
 ```
 
 - **走 Anthropic 协议**，默认通过 [DeepSeek](https://platform.deepseek.com/) 的 Anthropic 兼容端点接入，默认模型 `deepseek-v4-pro[1m]`。换 base URL 即可指向官方 Anthropic 或任何兼容服务。
-- **零第三方依赖**，纯 Go 标准库，编出单个静态二进制。
+- 单个静态二进制，开箱即用。
+
+### `/race`：并行竞赛模式
+
+```
+/race 8 修复 internal/foo 的并发 bug，跑通全部测试
+```
+
+派 N 个 agent（N≤1000）**各自在隔离的 git worktree** 里独立解同一道题（文件工具被硬隔离在各自写空间），窗口化并发；跑完后裁判流水线择优——客观粗筛（空 diff / `race.check` 校验命令淘汰，零 token）→ 并行 LLM 打分 → top-4 决赛。排行榜出来后 `/race apply` 一键应用冠军改动（不自动 commit），冠军分支保留可追溯。
+
+### 联网搜索
+
+`websearch` 多后端自动回退：设置 `TAVILY_API_KEY` 时走 [Tavily](https://tavily.com)（LLM 友好摘录，免费档 1000 次/月），否则 DuckDuckGo → Mojeek 免 key 兜底——零配置可用，有配置更好。`webfetch` 抓网页转纯文本。
 
 ## 快速开始
 
@@ -28,10 +40,10 @@ go run ./cmd/tokencode
 
 进入后直接输入指令，例如 `create hello.txt containing hi, then read it back`。
 
-权限三模式：**plan**（只读）/ **review**（逐次 y/n/a 确认，默认）/ **yolo**（全放行）。
-Shift+Tab 循环切换，或用 `/plan` `/review` `/yolo`；`/exit` 或 Ctrl-D 退出，跑动中 Ctrl-C 打断当前轮。
+权限四模式：**plan**（只读）/ **review**（逐次 y/n/a 确认，默认）/ **auto**（小模型按规则自动裁决）/ **yolo**（全放行）。
+Shift+Tab 循环切换，或用 `/plan` `/review` `/auto` `/yolo`；`/exit` 或 Ctrl-D 退出，跑动中 Ctrl-C 打断当前轮。
 
-输入 `/` 弹出命令补全菜单：`/help` 全部命令与快捷键、`/model` 查看与热切换模型、`/skills` 技能列表（`/技能名 [参数]` 调用，兼容 `.claude/skills`）、`/mcp` MCP server 状态与重连。
+输入 `/` 弹出命令补全菜单：`/help` 全部命令与快捷键、`/race` 并行竞赛、`/model` 查看与热切换模型、`/agents` 子代理类型（兼容 `.claude/agents`）、`/skills` 技能列表（`/技能名 [参数]` 调用，兼容 `.claude/skills`）、`/mcp` MCP server 状态与重连。`! <命令>` 直通 shell。
 
 ### 常用 flag
 
@@ -95,10 +107,14 @@ go vet ./...
 
 ## 路线
 
-- [x] 单 agent tool-use 循环（本 MVP）
+- [x] 单 agent tool-use 循环（MVP 底座）
 - [x] streaming、会话持久化（`-continue`/`-resume`）、多 provider（anthropic/openai/google 三协议）
-- [ ] A · 横向爆破（竞赛）：派 N 个、取最优、败者退钱
-- [ ] 工作区权威（单写者）+ 三方合并：甲模式的并行写
+- [x] 子代理（agent 工具）+ 动态工作流（workflow JS 编排）+ 联网搜索（Tavily/DDG/Mojeek）
+- [x] A · 横向爆破（竞赛）v1：`/race` 派 N 个、worktree 隔离、裁判择优 ——*打磨中：败者提前退钱、投票裁判、预算建模*
+- [ ] 团队接入：IM 通道体系（飞书/钉钉长连接 → 微信扫码/企微），每成员独立工作空间
+- [ ] 模型与国内 coding plan 开箱即用（内置 provider 目录 + `auth login`）
+- [ ] SDK/CLI 可编程化（headless `-p`、`serve`、Go SDK）与 WebUI 用量大盘
+- [ ] 工作区权威（单写者）+ 三方合并：B · 协作模式的并行写
 
 ## 参与 / 了解进展
 
