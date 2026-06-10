@@ -30,6 +30,11 @@ import (
 var version = "0.1.0-dev"
 
 func main() {
+	// 子命令（auth/models）不进 TUI，先于 flag 解析分发。
+	if handled, code := runSubcommand(os.Args[1:]); handled {
+		os.Exit(code)
+	}
+
 	model := flag.String("model", "", "model：别名、provider/model-id 或裸 model id（默认 $ANTHROPIC_MODEL 或 config 的 default_model）")
 	baseURL := flag.String("base-url", "", "覆盖端点 base URL（默认随 provider，或 $ANTHROPIC_BASE_URL）")
 	maxTokens := flag.Int("max-tokens", 4096, "max output tokens")

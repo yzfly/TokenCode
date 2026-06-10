@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -165,6 +166,47 @@ func TestResolvePassthrough(t *testing.T) {
 		if !tgt.Default || tgt.Model != m {
 			t.Fatalf("passthrough %q wrong: %+v", m, tgt)
 		}
+	}
+}
+
+// TestResolveCatalog 验证内置目录解析：env key 激活、缺 key 给指引、
+// 别名也能指向目录条目、用户 config 同名 provider 压过目录。
+func TestResolveCatalog(t *testing.T) {
+	writeConfig(t, `{"models": {"k2alias": "kimi-for-coding/kimi-test-model"}}`)
+	t.Setenv("KIMI_API_KEY", "") // 开发机可能真设了这个变量，先清掉
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	// 无凭据：报错并指引 auth login。
+	if _, err := cfg.Resolve("kimi-for-coding/kimi-test-model"); err == nil ||
+		!strings.Contains(err.Error(), "auth login kimi-for-coding") {
+		t.Fatalf("missing key should hint auth login, got %v", err)
+	}
+
+	// env key 激活：协议/端点来自目录。
+	t.Setenv("KIMI_API_KEY", "sk-kimi")
+	tgt, err := cfg.Resolve("kimi-for-coding/kimi-test-model")
+	if err != nil {
+		t.Fatalf("resolve via catalog: %v", err)
+	}
+	if tgt.Protocol != ProtocolAnthropic || tgt.APIKey != "sk-kimi" || !tgt.Bearer ||
+		!strings.Contains(tgt.BaseURL, "kimi.com") || tgt.Model != "kimi-test-model" {
+		t.Fatalf("catalog target wrong: %+v", tgt)
+	}
+
+	// 别名指向目录条目。
+	if tgt, err = cfg.Resolve("k2alias"); err != nil || tgt.APIKey != "sk-kimi" {
+		t.Fatalf("alias via catalog: %+v, %v", tgt, err)
+	}
+
+	// 用户 config 同名 provider 压过目录。
+	writeConfig(t, `{"providers": {"kimi-for-coding": {"base_url": "https://my.proxy/v1", "protocol": "openai", "api_key": "sk-mine"}}}`)
+	cfg, _ = Load()
+	tgt, err = cfg.Resolve("kimi-for-coding/m")
+	if err != nil || tgt.BaseURL != "https://my.proxy/v1" || tgt.Protocol != ProtocolOpenAI {
+		t.Fatalf("user config should shadow catalog: %+v, %v", tgt, err)
 	}
 }
 

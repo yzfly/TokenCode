@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/yzfly/tokencode/internal/auth"
+	"github.com/yzfly/tokencode/internal/catalog"
 	"github.com/yzfly/tokencode/internal/mcp"
 )
 
@@ -114,8 +116,44 @@ func (c Config) Resolve(model string) (Target, error) {
 		if _, ok := c.Providers[model[:i]]; ok {
 			return c.split(model)
 		}
+		// 用户 config 没配的 provider 落到内置目录（embed 的 models.dev 快照）：
+		// 国内外模型与 coding plan 无需手写 config 即可用。
+		if t, ok, err := resolveCatalog(model[:i], model[i+1:]); ok {
+			return t, err
+		}
 	}
 	return Target{Protocol: ProtocolAnthropic, Model: model, Default: true}, nil
+}
+
+// resolveCatalog 用内置目录解析 "provider/model-id"。ok=false 表示目录里
+// 没有这个 provider（继续走默认直传）；命中但缺 key 时给出带指引的错误。
+func resolveCatalog(name, modelID string) (Target, bool, error) {
+	p, found := catalog.Find(name)
+	if !found || !p.Usable() {
+		return Target{}, false, nil
+	}
+	key := p.KeyFromEnv()
+	if key == "" {
+		key = auth.Get(p.ID)
+	}
+	if key == "" {
+		hint := strings.Join(p.Env, " 或 ")
+		if hint == "" {
+			hint = "（该 provider 未声明环境变量）"
+		}
+		return Target{}, true, fmt.Errorf(
+			"provider %q 在内置目录中，但没有可用凭据：运行 `tokencode auth login %s` 或设置环境变量 %s",
+			name, name, hint)
+	}
+	return Target{
+		Protocol: p.Protocol,
+		BaseURL:  p.BaseURL,
+		APIKey:   key,
+		// 目录条目走 Authorization: Bearer——anthropic 兼容的 coding plan
+		//（Kimi/MiniMax/智谱…）均接受 Bearer 形态的 token。
+		Bearer: p.Protocol == ProtocolAnthropic,
+		Model:  modelID,
+	}, true, nil
 }
 
 // split 把 "provider/model-id" 拆开并装配 Target。
@@ -127,6 +165,10 @@ func (c Config) split(full string) (Target, error) {
 	name, modelID := full[:i], full[i+1:]
 	p, ok := c.Providers[name]
 	if !ok {
+		// 别名也可以指向内置目录的 provider（如 "k2": "kimi-for-coding/kimi-…"）。
+		if t, found, err := resolveCatalog(name, modelID); found {
+			return t, err
+		}
 		return Target{}, fmt.Errorf("未知 provider %q", name)
 	}
 	proto := normalizeProtocol(p.Protocol)
