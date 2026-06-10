@@ -17,6 +17,7 @@ import (
 	"github.com/yzfly/tokencode/internal/llm"
 	"github.com/yzfly/tokencode/internal/mcp"
 	"github.com/yzfly/tokencode/internal/pulse"
+	"github.com/yzfly/tokencode/internal/race"
 	"github.com/yzfly/tokencode/internal/session"
 	"github.com/yzfly/tokencode/internal/skill"
 	"github.com/yzfly/tokencode/internal/subagent"
@@ -83,7 +84,8 @@ func main() {
 		}
 	}
 
-	reg := tools.NewRegistry(tools.Read(), tools.Write(), tools.Edit(), tools.Bash())
+	reg := tools.NewRegistry(tools.Read(), tools.Write(), tools.Edit(), tools.Bash(),
+		tools.WebSearch(), tools.WebFetch())
 	ag := agent.New(client, reg, tgt.Model, *maxTokens)
 
 	// 子代理与动态工作流：与主 agent 共享注册表、客户端（跟随 /model 热切换）。
@@ -134,6 +136,42 @@ func main() {
 		)
 	}
 
+	// 竞赛模式（/race）：racer 经子代理运行器生成（绑定各自 worktree 为工具根、
+	// 跳过运行器信号量由 race 自管窗口、静默 UI 自动放行），裁判复用主模型。
+	racerDef := subagent.Def{Name: "racer", Prompt: race.RacerSystem, Source: "builtin"}
+	runRace := func(ctx context.Context, n int, task string, progress func(race.Progress)) (*race.Result, error) {
+		return race.Run(ctx, race.Options{
+			N:           n,
+			Task:        task,
+			Concurrency: cfg.Race.Concurrency,
+			Check:       cfg.Race.Check,
+			RepoRoot:    cwd,
+		}, race.Deps{
+			Spawn: func(ctx context.Context, i int, prompt, dir string) (string, error) {
+				return runner.SpawnDef(ctx, racerDef, prompt, subagent.SpawnOpts{
+					Root:  dir,
+					Label: fmt.Sprintf("racer#%d", i),
+					UI:    &agent.UI{}, // 静默：进度走聚合面板，工具在 worktree 内自动放行
+					NoSem: true,
+				})
+			},
+			Complete: func(ctx context.Context, system, user string) (string, error) {
+				client, model := ag.Client()
+				resp, err := client.Complete(ctx, llm.Request{
+					Model:     model,
+					System:    system,
+					Messages:  []llm.Message{{Role: llm.RoleUser, Text: user}},
+					MaxTokens: 512,
+				})
+				if err != nil {
+					return "", err
+				}
+				return resp.Text, nil
+			},
+			Progress: progress,
+		})
+	}
+
 	err = tui.Run(ag, tui.Options{
 		Model:     tgt.Model,
 		BaseURL:   effBaseURL,
@@ -150,6 +188,7 @@ func main() {
 		AutoJudge: makeAutoJudge(cfg, ag),
 		Workspace: tools.WorkspaceRoot(),
 		Version:   version,
+		RunRace:   runRace,
 		SwitchModel: func(name string) (string, string, error) {
 			t, err := cfg.Resolve(name)
 			if err != nil {

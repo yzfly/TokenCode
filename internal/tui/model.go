@@ -18,6 +18,7 @@ import (
 	"github.com/yzfly/tokencode/internal/config"
 	"github.com/yzfly/tokencode/internal/mcp"
 	"github.com/yzfly/tokencode/internal/pulse"
+	"github.com/yzfly/tokencode/internal/race"
 	"github.com/yzfly/tokencode/internal/skill"
 	"github.com/yzfly/tokencode/internal/subagent"
 )
@@ -97,6 +98,13 @@ type model struct {
 	menuItems    []command
 	menuSel      int
 	menuSuppress string // Esc 关闭时记下当时的输入值，值不变不重开
+
+	// 竞赛模式（/race）。runRace 由外壳注入（nil=不可用）；racing 期间
+	// 输入锁定、状态行显示聚合面板；结果留在 raceResult 等用户 apply/discard。
+	runRace    func(ctx context.Context, n int, task string) (*race.Result, error)
+	racing     bool
+	racePanel  string
+	raceResult *race.Result
 
 	transcript    []transItem // 原始对话，用于 resize 重渲染
 	rendered      []string    // 各项在当前宽度下的渲染缓存（每条只渲染一次，避免卡）
@@ -183,6 +191,31 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case noteMsg:
 		m.emit(transItem{kind: tNote, text: msg.text})
 		return m, nil
+
+	case raceProgressMsg:
+		m.racePanel = racePanelText(msg.p)
+		return m, nil
+
+	case raceDoneMsg:
+		m.racing = false
+		m.racePanel = ""
+		m.cancel = nil
+		m.state = stateIdle
+		m.ta.Focus()
+		switch {
+		case msg.err != nil && errors.Is(msg.err, context.Canceled):
+			m.emit(transItem{kind: tNote, text: "（竞赛已中断，worktree 已清理）"})
+		case msg.err != nil:
+			text := "竞赛失败: " + msg.err.Error()
+			if msg.res != nil && len(msg.res.Board) > 0 {
+				text += "\n" + raceBoardText(msg.res)
+			}
+			m.emit(transItem{kind: tErr, text: text})
+		default:
+			m.raceResult = msg.res
+			m.emit(transItem{kind: tNote, text: raceBoardText(msg.res)})
+		}
+		return m, textarea.Blink
 
 	case shellDoneMsg:
 		m.emit(transItem{kind: tShell, name: msg.cmd, text: msg.out,
@@ -763,6 +796,8 @@ func (m model) confirmBox() string {
 // 后台 turn（心跳/梦）只在等模型时给指示，与原行为一致。
 func (m model) statusIndicator() string {
 	switch {
+	case m.racing:
+		return m.racePanel
 	case m.thinking:
 		return "thinking…"
 	case m.state != stateRunning:

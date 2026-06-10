@@ -37,6 +37,8 @@ func (m model) commands() []command {
 			}},
 		{name: "mcp", argHint: "[reconnect <server>]", summary: "MCP server 状态与重连",
 			run: func(m model, args string) (tea.Model, tea.Cmd) { return m.cmdMCP(args) }},
+		{name: "race", argHint: "<N> <任务> | apply | discard", summary: "并行竞赛：N 个 agent 隔离解题，裁判择优",
+			run: func(m model, args string) (tea.Model, tea.Cmd) { return m.cmdRace(args) }},
 		{name: "agents", summary: "列出可用的子代理类型",
 			run: func(m model, _ string) (tea.Model, tea.Cmd) {
 				m.emit(transItem{kind: tNote, text: m.agentsText()})

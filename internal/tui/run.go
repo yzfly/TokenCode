@@ -16,6 +16,7 @@ import (
 	"github.com/yzfly/tokencode/internal/config"
 	"github.com/yzfly/tokencode/internal/mcp"
 	"github.com/yzfly/tokencode/internal/pulse"
+	"github.com/yzfly/tokencode/internal/race"
 	"github.com/yzfly/tokencode/internal/skill"
 	"github.com/yzfly/tokencode/internal/subagent"
 )
@@ -39,6 +40,10 @@ type Options struct {
 	Workspace   string           // 工作空间隔离根（显示用）；空=未开启
 	SwitchModel func(name string) (model, baseURL string, err error)
 	Version     string // /help 头部显示
+
+	// RunRace 驱动一场并行竞赛（/race），可为 nil（命令不可用）。
+	// progress 由外壳转投给事件循环，调用方只管按快照回调。
+	RunRace func(ctx context.Context, n int, task string, progress func(race.Progress)) (*race.Result, error)
 }
 
 // Run 启动外壳。tty 下跑 Bubble Tea；非 tty 退化为纯文本循环
@@ -79,7 +84,16 @@ func Run(ag *agent.Agent, opts Options) error {
 		m.rendered = append(m.rendered, m.renderItem(transItem{kind: tNote, text: opts.Notice}))
 	}
 	// 接管全屏：resize 整屏干净重排；开鼠标以支持滚轮滚动对话。
-	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	// p 先声明后赋值：runRace 闭包要把进度投回事件循环，引用它时已就绪。
+	var p *tea.Program
+	if opts.RunRace != nil {
+		m.runRace = func(ctx context.Context, n int, task string) (*race.Result, error) {
+			return opts.RunRace(ctx, n, task, func(pr race.Progress) {
+				p.Send(raceProgressMsg{p: pr})
+			})
+		}
+	}
+	p = tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
 	br := &bridge{prog: p, perms: perms, judge: opts.AutoJudge}
 	ui := br.UI()

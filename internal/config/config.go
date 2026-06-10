@@ -49,6 +49,13 @@ type Config struct {
 	DefaultModel string                      `json:"default_model"`
 	AutoModel    string                      `json:"auto_model"` // auto 模式权限裁决用的小模型（别名或 provider/model-id）；空=用主模型
 	MCP          map[string]mcp.ServerConfig `json:"mcp"`        // MCP server 名 → stdio 配置
+	Race         RaceConfig                  `json:"race"`       // 并行竞赛模式（/race）
+}
+
+// RaceConfig 是竞赛模式的可调参数。
+type RaceConfig struct {
+	Concurrency int    `json:"concurrency"` // 同时在飞的 racer 窗口；≤0 用内置默认（8）
+	Check       string `json:"check"`       // 客观校验命令（淘汰用，在各 worktree 内跑）；空=跳过
 }
 
 // Target 是 -model 解析后的落点：构造 llm 客户端所需的全部信息。
