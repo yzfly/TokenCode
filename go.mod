@@ -24,7 +24,11 @@ require (
 	github.com/clipperhouse/stringish v0.1.1 // indirect
 	github.com/clipperhouse/uax29/v2 v2.5.0 // indirect
 	github.com/dlclark/regexp2 v1.11.5 // indirect
+	github.com/dlclark/regexp2/v2 v2.2.1 // indirect
+	github.com/dop251/goja v0.0.0-20260607120635-348e6bea910d // indirect
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
+	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
+	github.com/google/pprof v0.0.0-20230207041349-798e818bf904 // indirect
 	github.com/gorilla/css v1.0.1 // indirect
 	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
