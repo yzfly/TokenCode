@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -28,11 +29,13 @@ type searchResult struct {
 	Title, URL, Snippet string
 }
 
-// searchBackend 是一个免费搜索引擎后端：拼 URL + 解析结果页。
-// 引擎们对数据中心 IP 的态度阴晴不定（DDG 会丢 202 挑战），
-// 所以按序尝试，谁先给出结果用谁。
+// searchBackend 是一个搜索后端。两种形态：API 型给 run（自管请求与解析，
+// 如 Tavily），抓取型给 url+parse（GET 结果页再正则抽取，如 DDG/Mojeek）。
+// 按序尝试，谁先给出结果用谁——有 key 的 API 型在前，免 key 抓取型兜底，
+// 保证零配置可用、有配置更好。
 type searchBackend struct {
 	name  string
+	run   func(ctx context.Context, client *http.Client, query string) ([]searchResult, error)
 	url   func(base, query string) string
 	parse func(body string) []searchResult
 	base  string // 端点；测试时可替换
@@ -43,11 +46,68 @@ type webSearchTool struct {
 	client   *http.Client
 }
 
-// WebSearch 返回联网搜索工具（DuckDuckGo → Mojeek 依次回退，均无需 API key）。
+// WebSearch 返回联网搜索工具。设置 TAVILY_API_KEY 时 Tavily 优先
+// （LLM 友好的摘录、免费档 1000 次/月），DuckDuckGo → Mojeek 免 key 兜底。
 func WebSearch() Tool {
+	var backends []searchBackend
+	if key := os.Getenv("TAVILY_API_KEY"); key != "" {
+		backends = append(backends, tavilyBackend("", key))
+	}
+	backends = append(backends, ddgBackend(""), mojeekBackend(""))
 	return &webSearchTool{
-		backends: []searchBackend{ddgBackend(""), mojeekBackend("")},
+		backends: backends,
 		client:   &http.Client{Timeout: 30 * time.Second},
+	}
+}
+
+// tavilyBackend 是 Tavily 搜索 API（https://docs.tavily.com）：
+// POST JSON，返回为 LLM 优化的标题+URL+内容摘录。
+func tavilyBackend(base, key string) searchBackend {
+	if base == "" {
+		base = "https://api.tavily.com/search"
+	}
+	return searchBackend{
+		name: "tavily",
+		base: base,
+		run: func(ctx context.Context, client *http.Client, query string) ([]searchResult, error) {
+			payload, _ := json.Marshal(map[string]any{
+				"query":       query,
+				"max_results": searchMax,
+			})
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, base, strings.NewReader(string(payload)))
+			if err != nil {
+				return nil, err
+			}
+			req.Header.Set("Authorization", "Bearer "+key)
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := client.Do(req)
+			if err != nil {
+				return nil, err
+			}
+			defer resp.Body.Close()
+			body, err := io.ReadAll(io.LimitReader(resp.Body, fetchBodyLimit))
+			if err != nil {
+				return nil, err
+			}
+			if resp.StatusCode != http.StatusOK {
+				return nil, fmt.Errorf("HTTP %s: %s", resp.Status, truncateText(string(body), 200))
+			}
+			var v struct {
+				Results []struct {
+					Title   string `json:"title"`
+					URL     string `json:"url"`
+					Content string `json:"content"`
+				} `json:"results"`
+			}
+			if err := json.Unmarshal(body, &v); err != nil {
+				return nil, fmt.Errorf("解析响应: %w", err)
+			}
+			out := make([]searchResult, 0, len(v.Results))
+			for _, r := range v.Results {
+				out = append(out, searchResult{Title: r.Title, URL: r.URL, Snippet: r.Content})
+			}
+			return out, nil
+		},
 	}
 }
 
@@ -105,7 +165,7 @@ func (*webSearchTool) Name() string { return "websearch" }
 func (*webSearchTool) Concurrent() bool { return true }
 
 func (*webSearchTool) Description() string {
-	return "Search the web (DuckDuckGo). Returns titles, URLs and snippets. Use webfetch to read a result page."
+	return "Search the web (Tavily when TAVILY_API_KEY is set, else DuckDuckGo/Mojeek). Returns titles, URLs and snippets. Use webfetch to read a result page."
 }
 
 func (*webSearchTool) Schema() map[string]any {
@@ -179,6 +239,9 @@ func (t *webSearchTool) Execute(ctx context.Context, input json.RawMessage) (str
 
 // searchOne 查询一个后端：非 200（如 DDG 的 202 反爬挑战）视为该后端失败。
 func (t *webSearchTool) searchOne(ctx context.Context, be searchBackend, query string) ([]searchResult, error) {
+	if be.run != nil {
+		return be.run(ctx, t.client, query)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, be.url(be.base, query), nil)
 	if err != nil {
 		return nil, err

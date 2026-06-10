@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -58,6 +59,61 @@ func TestWebSearch(t *testing.T) {
 	if strings.Contains(out, "Direct Link") {
 		t.Errorf("limit=1 should drop second result:\n%s", out)
 	}
+}
+
+func TestWebSearchTavily(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("method = %s", r.Method)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer tvly-test" {
+			t.Errorf("auth = %q", got)
+		}
+		var body struct {
+			Query string `json:"query"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		if body.Query != "golang" {
+			t.Errorf("query = %q", body.Query)
+		}
+		w.Write([]byte(`{"results":[{"title":"Go","url":"https://go.dev/","content":"Go is fast."}]}`))
+	}))
+	defer srv.Close()
+
+	tool := &webSearchTool{
+		backends: []searchBackend{tavilyBackend(srv.URL, "tvly-test")},
+		client:   &http.Client{Timeout: 5 * time.Second},
+	}
+	out, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{"query": "golang"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Go", "https://go.dev/", "Go is fast.", "引擎：tavily"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("tavily output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestWebSearchTavilyPreferred(t *testing.T) {
+	t.Setenv("TAVILY_API_KEY", "tvly-x")
+	tool := WebSearch().(*webSearchTool)
+	if len(tool.backends) != 3 || tool.backends[0].name != "tavily" {
+		t.Errorf("with key set, tavily should lead the chain: %+v", names(tool.backends))
+	}
+	t.Setenv("TAVILY_API_KEY", "")
+	tool = WebSearch().(*webSearchTool)
+	if len(tool.backends) != 2 || tool.backends[0].name != "duckduckgo" {
+		t.Errorf("without key, chain should be ddg→mojeek: %+v", names(tool.backends))
+	}
+}
+
+func names(bs []searchBackend) []string {
+	out := make([]string, len(bs))
+	for i, b := range bs {
+		out[i] = b.name
+	}
+	return out
 }
 
 func TestWebSearchFallback(t *testing.T) {
