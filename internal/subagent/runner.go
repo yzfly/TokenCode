@@ -69,15 +69,37 @@ func (r *Runner) Spawn(ctx context.Context, typ, prompt string) (string, error) 
 		}
 		return "", fmt.Errorf("未知子代理类型 %q（可用：%s）", typ, strings.Join(names, ", "))
 	}
+	return r.SpawnDef(ctx, def, prompt, SpawnOpts{})
+}
+
+// SpawnOpts 是 SpawnDef 的可选项。零值=与 Spawn 等价的默认行为。
+type SpawnOpts struct {
+	// Root 是子代理的工具根：文件工具锁定在此目录之内、相对路径基于它
+	// 解析、bash 在它之下执行。空=主工作区（不限制）。
+	Root string
+	// Label 是 UI 显示标签；空=def.Name。
+	Label string
+	// UI 覆盖外壳注入的 UI 工厂（竞赛等聚合显示场景用）；nil=经 Runner.UI。
+	// 注意 OnToolCall 为 nil 意味着工具全放行——调用方要自己保证沙箱（如 Root）。
+	UI *agent.UI
+	// NoSem 跳过运行器的并发信号量（调用方自管并发窗口，如竞赛模式）。
+	NoSem bool
+}
+
+// SpawnDef 用一个临时定义启动子代理（不要求 def 在注册类型表里）。
+// 竞赛等内置模式据此注入自己的契约提示与隔离写空间。
+func (r *Runner) SpawnDef(ctx context.Context, def Def, prompt string, opts SpawnOpts) (string, error) {
 	if strings.TrimSpace(prompt) == "" {
 		return "", fmt.Errorf("子代理任务 prompt 不能为空")
 	}
 
-	select {
-	case r.sem <- struct{}{}:
-		defer func() { <-r.sem }()
-	case <-ctx.Done():
-		return "", ctx.Err()
+	if !opts.NoSem {
+		select {
+		case r.sem <- struct{}{}:
+			defer func() { <-r.sem }()
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
 	}
 
 	client, model := r.Client()
@@ -92,18 +114,35 @@ func (r *Runner) Spawn(ctx context.Context, typ, prompt string) (string, error) 
 		client, model = c, m
 	}
 
-	sub := agent.New(client, r.subRegistry(def.Tools), model, r.MaxTokens)
-	sub.SetSystem(subSystem(def))
+	reg := r.subRegistry(def.Tools)
+	if opts.Root != "" {
+		reg.SetRoot(opts.Root)
+	}
+	sub := agent.New(client, reg, model, r.MaxTokens)
+	sub.SetSystem(subSystem(def, opts.Root))
 	sub.SetMaxCalls(maxCallsPerAgent)
 
+	label := opts.Label
+	if label == "" {
+		label = def.Name
+	}
 	ui := agent.UI{}
-	if r.UI != nil {
-		ui = r.UI(def.Name)
+	switch {
+	case opts.UI != nil:
+		ui = *opts.UI
+	case r.UI != nil:
+		ui = r.UI(label)
 	}
 	var final string
-	ui.OnAssistant = func(s string) { final = s } // 每段都覆盖，留下最后一段
+	prev := ui.OnAssistant
+	ui.OnAssistant = func(s string) { // 每段都覆盖，留下最后一段
+		final = s
+		if prev != nil {
+			prev(s)
+		}
+	}
 	if err := sub.Run(ctx, prompt, ui); err != nil {
-		return "", fmt.Errorf("子代理 %s: %w", def.Name, err)
+		return "", fmt.Errorf("子代理 %s: %w", label, err)
 	}
 	if strings.TrimSpace(final) == "" {
 		return "（子代理结束，无文本输出）", nil
@@ -132,14 +171,18 @@ func (r *Runner) subRegistry(allowed []string) *tools.Registry {
 }
 
 // subSystem 组装子代理系统提示：角色提示（定义正文）+ 子代理契约 + 环境。
-func subSystem(d Def) string {
+// root 非空时作为子代理的工作目录展示（工具已被锁定在其中）。
+func subSystem(d Def, root string) string {
 	role := strings.TrimSpace(d.Prompt)
 	if role == "" {
 		role = "You are a focused sub-agent."
 	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		cwd = "."
+	cwd := root
+	if cwd == "" {
+		var err error
+		if cwd, err = os.Getwd(); err != nil {
+			cwd = "."
+		}
 	}
 	return role + fmt.Sprintf(`
 
