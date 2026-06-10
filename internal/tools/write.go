@@ -43,6 +43,9 @@ func (writeTool) Execute(ctx context.Context, input json.RawMessage) (string, er
 	if a.Path == "" {
 		return "", fmt.Errorf("path is required")
 	}
+	if err := guardPath(a.Path); err != nil {
+		return "", err
+	}
 	if dir := filepath.Dir(a.Path); dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return "", err

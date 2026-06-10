@@ -45,6 +45,9 @@ func (readTool) Execute(ctx context.Context, input json.RawMessage) (string, err
 	if a.Path == "" {
 		return "", fmt.Errorf("path is required")
 	}
+	if err := guardPath(a.Path); err != nil {
+		return "", err
+	}
 	data, err := os.ReadFile(a.Path)
 	if err != nil {
 		return "", err

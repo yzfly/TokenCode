@@ -19,6 +19,12 @@ type Tool interface {
 	Execute(ctx context.Context, input json.RawMessage) (string, error)
 }
 
+// Concurrent 是工具的可选标记：模型在一条消息里发多个调用时，
+// 实现了它且返回 true 的工具（如子代理）并行执行，其余仍按序。
+type Concurrent interface {
+	Concurrent() bool
+}
+
 // Registry 是工具注册表，保持注册顺序。
 // 并发安全：MCP server 在后台连上后会动态 Add，agent 同时在读。
 type Registry struct {

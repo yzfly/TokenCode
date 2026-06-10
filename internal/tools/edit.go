@@ -50,6 +50,9 @@ func (editTool) Execute(ctx context.Context, input json.RawMessage) (string, err
 	if a.OldString == a.NewString {
 		return "", fmt.Errorf("old_string and new_string are identical")
 	}
+	if err := guardPath(a.Path); err != nil {
+		return "", err
+	}
 	data, err := os.ReadFile(a.Path)
 	if err != nil {
 		return "", err
