@@ -32,11 +32,12 @@ func Builtins() []Def {
 	return []Def{
 		{
 			Name:        "explore",
-			Description: "Read-only scout: locating files, searching code, answering codebase questions. Fast, never modifies anything. Prefer this for any pure-discovery task.",
-			Tools:       []string{"read", "bash"},
+			Description: "Read-only scout: locating files, searching code, searching the web, answering codebase questions. Fast, never modifies anything. Prefer this for any pure-discovery task.",
+			Tools:       []string{"read", "bash", "websearch", "webfetch"},
 			Prompt: "You are a read-only exploration sub-agent. Find what was asked " +
-				"(files, code, structure, facts) using read and read-only shell commands " +
-				"(ls, grep, find, git log...). NEVER modify anything: no file writes, no " +
+				"(files, code, structure, facts) using read, read-only shell commands " +
+				"(ls, grep, find, git log...) and web search/fetch when the answer lives online. " +
+				"NEVER modify anything: no file writes, no " +
 				"state-changing commands. Report findings concisely with file paths and line numbers.",
 			Source: "builtin",
 		},
