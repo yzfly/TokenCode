@@ -43,6 +43,8 @@ type Agent struct {
 	tools     *tools.Registry
 	model     string
 	maxTokens int
+	system    string // 自定义系统提示（子代理用）；空=默认 SystemPrompt()
+	maxCalls  int    // 单 turn 模型调用次数上限；0=不限（子代理防失控用）
 
 	mu      sync.Mutex
 	msgs    []llm.Message
@@ -76,6 +78,21 @@ func (a *Agent) SetClient(client llm.LLM, model string) {
 	a.llm = client
 	a.model = model
 	a.mu.Unlock()
+}
+
+// Client 返回当前客户端与模型。子代理用它继承主 agent 的模型（含热切换后的）。
+func (a *Agent) Client() (llm.LLM, string) {
+	return a.client()
+}
+
+// SetSystem 覆盖系统提示（子代理用自己的角色提示替代默认 SystemPrompt）。
+func (a *Agent) SetSystem(s string) {
+	a.system = s
+}
+
+// SetMaxCalls 限制单 turn 的模型调用次数（0=不限）。子代理用它防失控循环。
+func (a *Agent) SetMaxCalls(n int) {
+	a.maxCalls = n
 }
 
 // client 取当前客户端与模型（每次模型调用前读一次，配合 SetClient）。
@@ -159,10 +176,18 @@ func (a *Agent) history() []llm.Message {
 // runTurn 是一拍的主体，Run 与 Serve 共用。
 // system prompt 每拍重建：memory.md 被梦重写后，下个 turn 自然生效。
 func (a *Agent) runTurn(ctx context.Context, userInput string, ui UI) error {
-	system := SystemPrompt()
+	system := a.system
+	if system == "" {
+		system = SystemPrompt()
+	}
 	a.append(llm.Message{Role: llm.RoleUser, Text: userInput})
 
+	calls := 0
 	for {
+		if a.maxCalls > 0 && calls >= a.maxCalls {
+			return fmt.Errorf("超出单 turn 模型调用上限（%d 次），任务可能失控，已终止", a.maxCalls)
+		}
+		calls++
 		if ui.OnThinking != nil {
 			ui.OnThinking(true)
 		}
@@ -207,18 +232,37 @@ func (a *Agent) runTurn(ctx context.Context, userInput string, ui UI) error {
 			return nil // end turn
 		}
 
-		results := make([]llm.ToolResult, 0, len(resp.ToolUses))
-		for _, tu := range resp.ToolUses {
+		// 并行安全的工具（子代理）并发执行，其余按模型给出的顺序串行；
+		// 结果按原顺序回灌，模型看不出执行方式的差别。
+		results := make([]llm.ToolResult, len(resp.ToolUses))
+		var wg sync.WaitGroup
+		for i, tu := range resp.ToolUses {
+			if len(resp.ToolUses) > 1 && a.concurrentTool(tu.Name) {
+				wg.Add(1)
+				go func(i int, tu llm.ToolUse) {
+					defer wg.Done()
+					content, isErr := a.execTool(ctx, tu, ui)
+					results[i] = llm.ToolResult{ToolUseID: tu.ID, Content: content, IsError: isErr}
+				}(i, tu)
+				continue
+			}
 			content, isErr := a.execTool(ctx, tu, ui)
-			results = append(results, llm.ToolResult{
-				ToolUseID: tu.ID,
-				Content:   content,
-				IsError:   isErr,
-			})
+			results[i] = llm.ToolResult{ToolUseID: tu.ID, Content: content, IsError: isErr}
 		}
+		wg.Wait()
 		// 工具结果作为一条 user 消息回灌。
 		a.append(llm.Message{Role: llm.RoleUser, ToolResults: results})
 	}
+}
+
+// concurrentTool 报告一个工具是否标记了并行安全（tools.Concurrent）。
+func (a *Agent) concurrentTool(name string) bool {
+	t, ok := a.tools.Get(name)
+	if !ok {
+		return false
+	}
+	c, ok := t.(tools.Concurrent)
+	return ok && c.Concurrent()
 }
 
 func (a *Agent) toolDefs() []llm.Tool {

@@ -3,9 +3,12 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/yzfly/tokencode/internal/llm"
 	"github.com/yzfly/tokencode/internal/tools"
@@ -103,5 +106,97 @@ func TestAgentRejection(t *testing.T) {
 	}
 	if gotResult.ToolUseID != "c1" || !gotResult.IsError {
 		t.Fatalf("expected rejected tool_result for c1, got %+v", gotResult)
+	}
+}
+
+// waitSignalTool 用一对会合工具证明并行执行：wait 阻塞等 signal 发令。
+// 串行执行时 wait 先跑会超时报错；只有并发时两者都能立即完成。
+type waitSignalTool struct {
+	name string
+	ch   chan struct{}
+}
+
+func (w waitSignalTool) Name() string           { return w.name }
+func (w waitSignalTool) Description() string    { return w.name }
+func (w waitSignalTool) Schema() map[string]any { return map[string]any{"type": "object"} }
+func (w waitSignalTool) Concurrent() bool       { return true }
+func (w waitSignalTool) Execute(ctx context.Context, _ json.RawMessage) (string, error) {
+	if w.name == "signal" {
+		close(w.ch)
+		return "signaled", nil
+	}
+	select {
+	case <-w.ch:
+		return "got signal", nil
+	case <-time.After(5 * time.Second):
+		return "", fmt.Errorf("timeout: tools ran sequentially")
+	}
+}
+
+func TestConcurrentToolsRunInParallel(t *testing.T) {
+	ch := make(chan struct{})
+	fake := &fakeLLM{responses: []llm.Response{
+		{ToolUses: []llm.ToolUse{
+			{ID: "w1", Name: "wait", Input: json.RawMessage(`{}`)},
+			{ID: "s1", Name: "signal", Input: json.RawMessage(`{}`)},
+		}, StopReason: "tool_use"},
+		{Text: "done", StopReason: "end_turn"},
+	}}
+	reg := tools.NewRegistry(waitSignalTool{"wait", ch}, waitSignalTool{"signal", ch})
+	a := New(fake, reg, "m", 100)
+
+	if err := a.Run(context.Background(), "go", UI{}); err != nil {
+		t.Fatal(err)
+	}
+	// 两个结果都成功且按原顺序回灌。
+	var trs []llm.ToolResult
+	for _, m := range fake.lastReq.Messages {
+		if len(m.ToolResults) > 0 {
+			trs = m.ToolResults
+		}
+	}
+	if len(trs) != 2 || trs[0].ToolUseID != "w1" || trs[1].ToolUseID != "s1" {
+		t.Fatalf("results wrong: %+v", trs)
+	}
+	for _, tr := range trs {
+		if tr.IsError {
+			t.Fatalf("tool errored (sequential execution?): %+v", tr)
+		}
+	}
+}
+
+func TestMaxCallsGuard(t *testing.T) {
+	// 模型永远要求调工具：maxCalls 应当掐断循环。
+	loop := llm.Response{ToolUses: []llm.ToolUse{{ID: "x", Name: "noop", Input: json.RawMessage(`{}`)}}, StopReason: "tool_use"}
+	fake := &fakeLLM{responses: []llm.Response{loop, loop, loop, loop, loop}}
+	a := New(fake, tools.NewRegistry(noopTool{}), "m", 100)
+	a.SetMaxCalls(3)
+	err := a.Run(context.Background(), "go", UI{})
+	if err == nil || !strings.Contains(err.Error(), "上限") {
+		t.Fatalf("want max-calls error, got %v", err)
+	}
+	if fake.calls != 3 {
+		t.Fatalf("expected exactly 3 llm calls, got %d", fake.calls)
+	}
+}
+
+type noopTool struct{}
+
+func (noopTool) Name() string           { return "noop" }
+func (noopTool) Description() string    { return "noop" }
+func (noopTool) Schema() map[string]any { return map[string]any{"type": "object"} }
+func (noopTool) Execute(ctx context.Context, _ json.RawMessage) (string, error) {
+	return "ok", nil
+}
+
+func TestSetSystemOverride(t *testing.T) {
+	fake := &fakeLLM{responses: []llm.Response{{Text: "hi", StopReason: "end_turn"}}}
+	a := New(fake, tools.NewRegistry(), "m", 100)
+	a.SetSystem("custom sub-agent prompt")
+	if err := a.Run(context.Background(), "x", UI{}); err != nil {
+		t.Fatal(err)
+	}
+	if fake.lastReq.System != "custom sub-agent prompt" {
+		t.Fatalf("system = %q", fake.lastReq.System)
 	}
 }
