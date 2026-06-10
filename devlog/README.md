@@ -15,3 +15,6 @@
 | 日期 | 主题 | 一句话 |
 |------|------|--------|
 | [2026-06-10](2026-06-10.md) | 第一天：单 agent 底座跑通了 | 单 agent tool-use 循环 → Bubble Tea TUI → 多模型协议转换层 → 心跳与自动做梦。 |
+| [2026-06-10（二）](2026-06-10.md) | 调研三家 + 架构图 + Google 协议 | 四份竞品调研落盘 → docs/architecture.md 完整设计 → 协议层按协议命名（anthropic/openai/google）。 |
+| [2026-06-10（三）](2026-06-10.md) | M2：流式 + 会话持久化 | 三协议 SSE 流式（agent 循环零改动）→ JSONL 会话落盘与 -continue/-resume（水位线机制）。 |
+| [2026-06-10（四）](2026-06-10.md) | TUI 命令体系 | 命令注册表（/help、补全菜单、分发三处同源）+ /model 热切换 + skills 加载器 + 最小 MCP stdio client。 |

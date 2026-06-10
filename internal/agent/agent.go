@@ -18,6 +18,9 @@ import (
 type UI struct {
 	// OnAssistant 在模型产出文本时调用。
 	OnAssistant func(text string)
+	// OnAssistantDelta 在流式生成时随每段正文增量调用（最终完整文本仍经
+	// OnAssistant 给出一次）。为 nil 时走非流式 Complete。
+	OnAssistantDelta func(delta string)
 	// OnToolCall 在执行工具前调用，返回 false 表示拒绝该次调用。
 	OnToolCall func(name string, input json.RawMessage) bool
 	// OnToolResult 在工具执行后调用。
@@ -44,6 +47,9 @@ type Agent struct {
 	mu      sync.Mutex
 	msgs    []llm.Message
 	running atomic.Bool // 是否有 turn 正在执行（仅 Serve 路径维护）
+
+	persist   func([]llm.Message) // 持久化回调，可为 nil
+	persisted int                 // 已交给 persist 的历史水位线
 }
 
 // New 创建一个 agent。
@@ -58,7 +64,58 @@ func New(client llm.LLM, reg *tools.Registry, model string, maxTokens int) *Agen
 
 // Run 接收一句用户输入，跑完一轮 tool-use 循环（可能多次调用模型）。
 func (a *Agent) Run(ctx context.Context, userInput string, ui UI) error {
-	return a.runTurn(ctx, userInput, ui)
+	err := a.runTurn(ctx, userInput, ui)
+	a.flushPersist()
+	return err
+}
+
+// SetClient 运行时切换模型/协议客户端（/model 命令）。turn 进行中调用也安全：
+// 当前请求用旧客户端，下一次模型调用起用新的。
+func (a *Agent) SetClient(client llm.LLM, model string) {
+	a.mu.Lock()
+	a.llm = client
+	a.model = model
+	a.mu.Unlock()
+}
+
+// client 取当前客户端与模型（每次模型调用前读一次，配合 SetClient）。
+func (a *Agent) client() (llm.LLM, string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.llm, a.model
+}
+
+// Seed 在 Serve/Run 启动前注入历史（resume）。注入的消息视为已持久化。
+func (a *Agent) Seed(ms []llm.Message) {
+	a.mu.Lock()
+	a.msgs = append(a.msgs[:0], ms...)
+	a.persisted = len(a.msgs)
+	a.mu.Unlock()
+}
+
+// SetPersist 注册持久化回调：每拍结束后，新留入历史的消息按序交给它
+// （在 turn 执行者 goroutine 上同步调用）。心跳空转等被剔除的拍不会经过它。
+func (a *Agent) SetPersist(fn func([]llm.Message)) {
+	a.persist = fn
+}
+
+// flushPersist 把水位线之上的新消息交给持久化回调。truncate 把历史截到
+// 水位线之下时（空转剔除/失败回滚），水位线跟着回落，被剔除的消息从未落盘。
+func (a *Agent) flushPersist() {
+	if a.persist == nil {
+		return
+	}
+	a.mu.Lock()
+	if a.persisted > len(a.msgs) {
+		a.persisted = len(a.msgs)
+	}
+	fresh := make([]llm.Message, len(a.msgs)-a.persisted)
+	copy(fresh, a.msgs[a.persisted:])
+	a.persisted = len(a.msgs)
+	a.mu.Unlock()
+	if len(fresh) > 0 {
+		a.persist(fresh)
+	}
 }
 
 // Snapshot 返回对话历史的值拷贝。元素内部的 slice 与原历史共享底层数组，
@@ -109,13 +166,26 @@ func (a *Agent) runTurn(ctx context.Context, userInput string, ui UI) error {
 		if ui.OnThinking != nil {
 			ui.OnThinking(true)
 		}
-		resp, err := a.llm.Complete(ctx, llm.Request{
-			Model:     a.model,
+		client, model := a.client()
+		req := llm.Request{
+			Model:     model,
 			System:    system,
 			Messages:  a.history(),
 			Tools:     a.toolDefs(),
 			MaxTokens: a.maxTokens,
-		})
+		}
+		var resp llm.Response
+		var err error
+		// codec 支持流式且外壳要增量时走流式；两条路径返回同语义的 Response。
+		if s, ok := client.(llm.Streamer); ok && ui.OnAssistantDelta != nil {
+			resp, err = s.CompleteStream(ctx, req, func(d llm.Delta) {
+				if d.Text != "" {
+					ui.OnAssistantDelta(d.Text)
+				}
+			})
+		} else {
+			resp, err = client.Complete(ctx, req)
+		}
 		if ui.OnThinking != nil {
 			ui.OnThinking(false)
 		}

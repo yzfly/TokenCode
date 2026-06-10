@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 )
 
 // Tool 是 agent 可调用的一个能力。
@@ -19,7 +20,9 @@ type Tool interface {
 }
 
 // Registry 是工具注册表，保持注册顺序。
+// 并发安全：MCP server 在后台连上后会动态 Add，agent 同时在读。
 type Registry struct {
+	mu    sync.RWMutex
 	tools map[string]Tool
 	order []string
 }
@@ -35,6 +38,8 @@ func NewRegistry(ts ...Tool) *Registry {
 
 // Add 注册一个工具（重名覆盖，顺序不变）。
 func (r *Registry) Add(t Tool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if _, ok := r.tools[t.Name()]; !ok {
 		r.order = append(r.order, t.Name())
 	}
@@ -43,12 +48,16 @@ func (r *Registry) Add(t Tool) {
 
 // Get 按名取工具。
 func (r *Registry) Get(name string) (Tool, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	t, ok := r.tools[name]
 	return t, ok
 }
 
 // List 按注册顺序返回所有工具。
 func (r *Registry) List() []Tool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	out := make([]Tool, 0, len(r.order))
 	for _, n := range r.order {
 		out = append(out, r.tools[n])

@@ -5,7 +5,7 @@
 
 ## 一句话
 
-一个跑在终端里的**单 agent 编码助手**：你说一句话，它用 read/write/edit/bash 四个工具读改文件、跑命令，循环直到把活干完，配一套 Bubble Tea TUI。已内置**多模型协议转换层**（anthropic / openai-chat 双协议，config 注册任意 provider）与**心跳 + 自动做梦**（agent 长活机制）。**并行（项目的核心卖点）尚未开始**——当前是为并行准备的「底座单元」。
+一个跑在终端里的**单 agent 编码助手**：你说一句话，它用 read/write/edit/bash 四个工具读改文件、跑命令，循环直到把活干完，配一套 Bubble Tea TUI。已内置**多模型协议转换层**（anthropic / openai / google 三协议，config 注册任意 provider）、**SSE 流式输出**、**会话 JSONL 持久化**（`-continue` / `-resume`）与**心跳 + 自动做梦**（agent 长活机制）。**并行（项目的核心卖点）尚未开始**——当前是为并行准备的「底座单元」。整张架构图见 `docs/architecture.md`（本地，未入库）。
 
 ## 路线图位置
 
@@ -18,7 +18,12 @@
 
 - 自然语言驱动的 tool-use 循环：消息 → LLM(带工具) → `tool_use` → 执行 → `tool_result` 回灌 → 循环 → 结束。
 - 四个工具：`read`（只读免确认）/ `write` / `edit` / `bash`。
-- **多模型**：内置协议转换层，`anthropic` 与 `openai-chat` 两种协议 codec；`~/.config/tokencode/config.json` 注册 provider（DeepSeek/Kimi/Qwen/OpenRouter/Ollama……），`-model 别名` 或 `-model provider/model-id` 切换；无 config 时默认经 DeepSeek 接入（`deepseek-v4-pro[1m]`），行为与之前一致。
+- **多模型**：内置协议转换层，协议按协议命名——`anthropic` / `openai` / `google` 三种 codec（旧值 `openai-chat` 兼容归一化）；`~/.config/tokencode/config.json` 注册 provider（DeepSeek/Kimi/Qwen/OpenRouter/Ollama/Gemini……），`-model 别名` 或 `-model provider/model-id` 切换；无 config 时默认经 DeepSeek 接入（`deepseek-v4-pro[1m]`），行为与之前一致。
+- **命令体系**：命令注册表驱动的 `/help /model /skills /mcp /plan /review /yolo /exit`；输入 `/` 弹补全菜单（前缀优先、↑↓ 选、Tab 补全、Enter 执行、Esc 关）；未知命令不发模型、给就近建议；`//` 转义发普通消息。`/model <名>` 运行时热切换模型。需求全图见 `docs/requirements/tui-commands.md`（P1/P2 排好了队）。
+- **Skills（M3 lite）**：扫 `.tokencode/skills` 并兼容 `.claude/skills`、`.agents/skills`，启动只读 frontmatter，`/技能名 [参数]` 调用时才读正文（渐进披露）；$ARGUMENTS 替换对齐 Claude Code 语义。
+- **MCP（最小 stdio client）**：config.json 的 `"mcp"` 字段配置 server，后台连接绝不阻塞启动；工具以 `mcp__server__tool` 注册进 registry，对 agent 与内置工具零差别；`/mcp` 看状态、`/mcp reconnect <名>` 重连；退出硬 kill 子进程。
+- **流式输出**：三协议都实现 `llm.Streamer`（SSE），TUI 实时显示生成中的文本尾巴（完成后整段 markdown 渲染替换），plain 模式逐段打印；codec 不支持或外壳不要增量时自动回落非流式。
+- **会话持久化**：每拍结束把新留下的历史追加进 `$XDG_DATA_HOME/tokencode/sessions/YYYY/MM/DD/<id>.jsonl`（append-only，崩溃安全，半行损坏自动跳过）；`-continue` 继续当前目录最近会话、`-resume <id>` 指定恢复、`-no-session` 关闭；心跳空转拍剔除后不落盘（水位线机制）。
 - **Event 即拍**：用户消息、心跳、梦醒是同一个 `Event` 原语的不同来源，agent 是消费 `chan Event` 的 actor，所有 turn 串行（单写者）。
 - **心跳**（`-heartbeat 30m` 显式开启）：三级短路省 token——L0 本地检查零 token → L1 空转回哨兵 `HEARTBEAT_OK` 即从历史剔除 → L2 真有事才完整跑；非交互 turn 只读放行、写类拒绝。
 - **自动做梦**：空闲 ∧ 有料双条件触发，独立 goroutine 调一次 LLM 把会话压缩成 `.tokencode/memory.md`，system prompt 注入「长期记忆」——重启也记得。
@@ -30,9 +35,13 @@
 
 ```
 cmd/tokencode/main.go      解析 flag/env/config → 按协议构造 client → tui.Run
-internal/llm/              LLM interface（统一 IR）+ anthropic / openai 两个协议 codec
-internal/config/           模型注册表（providers/models/default_model，JSON）
-internal/agent/            Agent：对话状态 + Run/Serve（Event actor）+ Snapshot
+internal/llm/              LLM interface（统一 IR）+ anthropic / openai / google 三协议 codec
+                           + Streamer 流式接口与共用 SSE 读取器
+internal/config/           模型注册表 + MCP server 配置（JSON）
+internal/session/          会话 JSONL 持久化（Create/Open/Append/Load/Latest）
+internal/skill/            Agent Skills 加载器（frontmatter 索引 + 正文懒加载）
+internal/mcp/              MCP stdio client（JSON-RPC 握手/工具发现/调用 + Manager）
+internal/agent/            Agent：对话状态 + Run/Serve（Event actor）+ Snapshot + 持久化水位线
 internal/pulse/            心跳（Ticker + L0 短路）+ 做梦（Dreamer → memory.md）
 internal/tools/            Tool interface + Registry + read/write/edit/bash
 internal/tui/              Bubble Tea 外壳（alt-screen + viewport）
@@ -41,6 +50,7 @@ internal/tui/              Bubble Tea 外壳（alt-screen + viewport）
   messages.go msg 类型 + bridge（agent.UI 回调 → program.Send）
   theme.go    DeepSeek 配色（lipgloss + glamour，AdaptiveColor 亮暗两套）
   markdown.go renderMarkdown(md, width)
+  commands.go 命令注册表：/help、/ 补全菜单、分发三处同源（+ commands_test.go）
   perms.go    加锁的权限状态 + decide() 裁决（+ perms_test.go）
   logo.go     字符 logo + 欢迎卡（embed 两版 .txt）
   render.go   保留的纯函数 oneLine/compactJSON/interpretConfirmKey（+ render_test.go）
@@ -69,16 +79,15 @@ go test ./...   # agent 循环 / llm 协议(httptest) / tools / tui 纯函数 + 
 go vet ./...
 ```
 
-常用 flag：`-model`、`-base-url`、`-max-tokens`（默认 4096）、`-yolo`（初始 yolo 模式）、`-theme auto|light|dark`、`-heartbeat 30m`（心跳，默认关闭）。
+常用 flag：`-model`、`-base-url`、`-max-tokens`（默认 4096）、`-yolo`（初始 yolo 模式）、`-theme auto|light|dark`、`-heartbeat 30m`（心跳，默认关闭）、`-continue`（继续最近会话）、`-resume <id>`、`-no-session`（不落盘）。
 
 **依赖**：阶段 0 是零第三方依赖；阶段 1 引入了 charmbracelet 那套（bubbletea / bubbles / glamour / lipgloss）+ `golang.org/x/term` 及一长串间接依赖。`go.mod` 现在有 require。这是为 TUI 观感有意识付的账。
 
 ## 当前已知限制
 
-- **不流式**：openai/anthropic codec 都只有非流式 `Complete`（流式在后续路线上），TUI 用 spinner 补「活着」感。
 - **无终端原生 scrollback**：alt-screen 的代价，滚动靠 viewport + 滚轮；想找回原生滚动得换 inline 模式并解决其 resize 残留。
-- **历史不持久化**：退出即丢。
-- **会话不持久化**：没有 JSONL 树/分支。
+- **会话无分支/fork**：持久化是线性 append；TUI resume 后不回放历史画面（模型记得，屏幕不重绘旧消息）。
+- **流式的 thinking 不上屏**：Delta 里有 Thinking 字段，外壳暂未展示。
 - **做梦 v1 用主模型**：`DreamModel` 便宜档配置留位未接。
 - **plain（非 tty）模式心跳不生效**：runPlain 同步调 Run，与 actor 并行会破坏单写者不变量。
 - **没有并行**：核心卖点还没开建。

@@ -12,8 +12,9 @@ import (
 // 在 worker goroutine 与 Bubble Tea 事件循环之间传递的消息类型。
 // worker 只发原始数据，所有渲染在 Update 里单线程完成。
 type (
-	assistantMsg struct{ text string }
-	toolCallMsg  struct {
+	assistantMsg      struct{ text string }
+	assistantDeltaMsg struct{ text string }
+	toolCallMsg       struct {
 		name  string
 		input json.RawMessage
 	}
@@ -62,6 +63,12 @@ func (b *bridge) UI() agent.UI {
 			b.prog.Send(turnDoneMsg{source: source, err: err})
 		},
 		OnAssistant: func(text string) { b.prog.Send(assistantMsg{text}) },
+		OnAssistantDelta: func(text string) {
+			// 只有用户 turn 流式上屏；后台 turn 的结果走完整的 OnAssistant。
+			if b.src == agent.SourceUser {
+				b.prog.Send(assistantDeltaMsg{text})
+			}
+		},
 		OnToolCall: func(name string, input json.RawMessage) bool {
 			b.prog.Send(toolCallMsg{name, input})
 			if b.src != agent.SourceUser {

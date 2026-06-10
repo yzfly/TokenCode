@@ -15,7 +15,10 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/yzfly/tokencode/internal/agent"
+	"github.com/yzfly/tokencode/internal/config"
+	"github.com/yzfly/tokencode/internal/mcp"
 	"github.com/yzfly/tokencode/internal/pulse"
+	"github.com/yzfly/tokencode/internal/skill"
 )
 
 type uiState int
@@ -78,9 +81,21 @@ type model struct {
 	modelName string
 	baseURL   string
 
+	cfg         config.Config // /model 列表用
+	skills      []skill.Skill // /skills 列表与 /技能名 调用
+	mcp         *mcp.Manager  // /mcp 状态，可为 nil
+	switchModel func(name string) (model, baseURL string, err error)
+	version     string
+
+	// / 补全菜单（需求 §4.1）：menuItems 非空即菜单开启；全部来自命令注册表内存数据。
+	menuItems    []command
+	menuSel      int
+	menuSuppress string // Esc 关闭时记下当时的输入值，值不变不重开
+
 	transcript    []transItem // 原始对话，用于 resize 重渲染
 	rendered      []string    // 各项在当前宽度下的渲染缓存（每条只渲染一次，避免卡）
 	toolsExpanded bool        // 是否展开历史工具执行（默认折叠，只留最近 2 个）
+	streamBuf     string      // 流式生成中的未完成正文（完成后清空、由最终渲染替换）
 }
 
 // visibleToolExecs 是折叠时仍完整显示的最近工具执行数。
@@ -125,7 +140,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		m.ta.SetWidth(max(20, msg.Width-4))
 		m.vp.Width = msg.Width
-		m.vp.Height = max(1, msg.Height-footerReserve)
+		m.relayout()
 		m.rebuildContent() // 按新宽度整体重排——alt-screen 下整屏干净重绘，永不残留
 		m.ready = true
 		return m, nil
@@ -135,7 +150,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sp, cmd = m.sp.Update(msg)
 		return m, cmd
 
+	case assistantDeltaMsg:
+		// 流式期间显示原始文本尾巴；最终的 assistantMsg 会用 markdown 渲染替换它。
+		m.streamBuf += msg.text
+		m.vp.SetContent(m.viewportContent())
+		m.vp.GotoBottom()
+		return m, nil
+
 	case assistantMsg:
+		m.streamBuf = ""
 		m.emit(transItem{kind: tAssistant, text: msg.text})
 		return m, nil
 
@@ -178,6 +201,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.cancel = nil
 		m.thinking = false
+		m.streamBuf = "" // 中断/出错时丢掉未完成的流式尾巴
 		m.state = stateIdle
 		m.ta.Focus()
 		switch {
@@ -242,6 +266,30 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	default: // stateIdle
+		// 补全菜单开启时，↑↓/Tab/Enter/Esc 先被菜单消费。
+		if len(m.menuItems) > 0 {
+			switch msg.String() {
+			case "up":
+				if m.menuSel > 0 {
+					m.menuSel--
+				}
+				return m, nil
+			case "down":
+				if m.menuSel < len(m.menuItems)-1 {
+					m.menuSel++
+				}
+				return m, nil
+			case "tab":
+				return m.menuComplete(false)
+			case "enter":
+				return m.menuComplete(true)
+			case "esc":
+				m.menuSuppress = m.ta.Value()
+				m.menuItems = nil
+				m.relayout()
+				return m, nil
+			}
+		}
 		switch msg.String() {
 		case "ctrl+c", "ctrl+d":
 			return m, tea.Quit
@@ -260,8 +308,66 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		var cmd tea.Cmd
 		m.ta, cmd = m.ta.Update(msg)
+		m.refreshMenu()
 		return m, cmd
 	}
+}
+
+// refreshMenu 按当前输入重算补全菜单：行首 /、未输入空格、非 // 转义时开启。
+func (m *model) refreshMenu() {
+	v := m.ta.Value()
+	open := strings.HasPrefix(v, "/") && !strings.HasPrefix(v, "//") &&
+		!strings.ContainsAny(v, " \n") && v != m.menuSuppress
+	if !open {
+		m.menuItems = nil
+		m.relayout()
+		return
+	}
+	if v != m.menuSuppress {
+		m.menuSuppress = ""
+	}
+	m.menuItems = filterCommands(m.commands(), strings.TrimPrefix(v, "/"))
+	if m.menuSel >= len(m.menuItems) {
+		m.menuSel = 0
+	}
+	m.relayout()
+}
+
+// menuComplete 接受当前选中项：带参数的命令补全 + 空格等参数；
+// 无参数命令在 execute（Enter）时直接执行。
+func (m model) menuComplete(execute bool) (tea.Model, tea.Cmd) {
+	if len(m.menuItems) == 0 {
+		return m, nil
+	}
+	c := m.menuItems[m.menuSel]
+	if c.argHint == "" && execute {
+		m.menuItems = nil
+		m.relayout()
+		m.ta.SetValue("/" + c.name)
+		return m.submitInput()
+	}
+	suffix := ""
+	if c.argHint != "" {
+		suffix = " "
+	}
+	m.ta.SetValue("/" + c.name + suffix)
+	m.ta.CursorEnd()
+	m.refreshMenu()
+	return m, nil
+}
+
+// relayout 重算 viewport 高度（footer 固定 5 行 + 菜单动态高度）。
+func (m *model) relayout() {
+	m.vp.Height = max(1, m.height-footerReserve-m.menuHeight())
+}
+
+// menuHeight 是菜单当前占的行数（最多 6 行）。
+func (m model) menuHeight() int {
+	n := len(m.menuItems)
+	if n > 6 {
+		n = 6
+	}
+	return n
 }
 
 func (m model) submitInput() (tea.Model, tea.Cmd) {
@@ -269,15 +375,15 @@ func (m model) submitInput() (tea.Model, tea.Cmd) {
 	if text == "" {
 		return m, nil
 	}
-	switch text {
-	case "/exit", "/quit":
-		return m, tea.Quit
-	case "/plan", "/review", "/yolo":
-		return m.setMode(text[1:])
-	}
 	m.history = append(m.history, text)
 	m.histIdx = len(m.history)
 	m.draft = ""
+	m.menuItems = nil
+	m.menuSuppress = ""
+	m.relayout()
+	if strings.HasPrefix(text, "/") {
+		return m.runCommand(text)
+	}
 	m.ta.Reset()
 	m.state = stateRunning
 	m.ta.Blur()
@@ -325,6 +431,7 @@ func (m model) historyPrev() (tea.Model, tea.Cmd) {
 		m.ta.SetValue(m.history[m.histIdx])
 		m.ta.CursorEnd()
 	}
+	m.refreshMenu()
 	return m, nil
 }
 
@@ -341,6 +448,7 @@ func (m model) historyNext() (tea.Model, tea.Cmd) {
 		m.ta.SetValue(m.history[m.histIdx])
 	}
 	m.ta.CursorEnd()
+	m.refreshMenu()
 	return m, nil
 }
 
@@ -368,6 +476,15 @@ func (m *model) rebuildContent() {
 func (m model) viewportContent() string {
 	banner := renderBanner(m.modelName, m.baseURL, m.perms.current(), m.width)
 	body := m.renderTranscript()
+	if m.streamBuf != "" {
+		// 流式尾巴：按宽度软换行的原始文本（markdown 渲染等最终消息到了再做一次）。
+		tail := lipgloss.NewStyle().Width(m.contentWidth()).Render(m.streamBuf)
+		if body == "" {
+			body = tail
+		} else {
+			body += "\n" + tail
+		}
+	}
 	if body == "" {
 		return banner
 	}
@@ -467,9 +584,50 @@ func (m model) footerView() string {
 		}
 		footer = lipgloss.JoinVertical(lipgloss.Left, top, box.Render(m.ta.View()), status)
 	}
+	if menu := m.menuView(); menu != "" {
+		footer = lipgloss.JoinVertical(lipgloss.Left, menu, footer)
+	}
 	// 截断每行到终端宽度，避免长行折行把布局顶乱。
 	return lipgloss.NewStyle().MaxWidth(m.width).Render(footer)
 }
+
+// menuView 渲染 / 补全菜单（最多 6 行，选中行反色；选中项超窗时滚动跟随）。
+func (m model) menuView() string {
+	if len(m.menuItems) == 0 {
+		return ""
+	}
+	start := 0
+	if m.menuSel >= 6 {
+		start = m.menuSel - 5
+	}
+	end := start + 6
+	if end > len(m.menuItems) {
+		end = len(m.menuItems)
+	}
+	lines := make([]string, 0, end-start)
+	for i := start; i < end; i++ {
+		c := m.menuItems[i]
+		label := "/" + c.name
+		if c.argHint != "" {
+			label += " " + c.argHint
+		}
+		badge := ""
+		if c.source != "" {
+			badge = " [" + c.source + "]"
+		}
+		line := fmt.Sprintf("  %-26s %s%s", label, c.summary, badge)
+		if i == m.menuSel {
+			line = menuSelStyle.Render(line)
+		} else {
+			line = hintStyle.Render(line)
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// menuSelStyle 是补全菜单选中行的样式。
+var menuSelStyle = lipgloss.NewStyle().Reverse(true)
 
 // confirmBox 是醒目的工具批准框（4 行：边框 + 2 内容行），替代输入框位置。
 func (m model) confirmBox() string {
@@ -483,9 +641,8 @@ func (m model) confirmBox() string {
 }
 
 func (m model) statusLine() string {
-	return m.modelName + " · ⏎ 发送 · ⇧⇥ 模式 · ↑↓ 历史 · PgUp/PgDn 滚动 · ^C " +
-		map[bool]string{true: "打断", false: "退出"}[m.state == stateRunning] +
-		" · /exit"
+	return m.modelName + " · ⏎ 发送 · ⇧⇥ 模式 · ↑↓ 历史 · /help · ^C " +
+		map[bool]string{true: "打断", false: "退出"}[m.state == stateRunning]
 }
 
 // contentWidth 是 markdown 渲染可用的宽度。

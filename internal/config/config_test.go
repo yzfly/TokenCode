@@ -30,6 +30,10 @@ const fixture = `{
 		"ollama": {
 			"base_url": "http://localhost:11434/v1",
 			"protocol": "openai-chat"
+		},
+		"gemini": {
+			"protocol": "google",
+			"api_key_env": "TEST_GEMINI_KEY"
 		}
 	},
 	"models": {
@@ -87,7 +91,8 @@ func TestResolveAlias(t *testing.T) {
 	}
 }
 
-// TestResolveProviderSyntax 验证 ② provider/model-id 语法。
+// TestResolveProviderSyntax 验证 ② provider/model-id 语法，
+// 且旧协议名 "openai-chat" 被归一化为 "openai"。
 func TestResolveProviderSyntax(t *testing.T) {
 	writeConfig(t, fixture)
 
@@ -103,9 +108,42 @@ func TestResolveProviderSyntax(t *testing.T) {
 	if tgt.Default {
 		t.Fatal("provider syntax should not be passthrough")
 	}
-	if tgt.Protocol != ProtocolOpenAIChat || tgt.BaseURL != "http://localhost:11434/v1" ||
+	if tgt.Protocol != ProtocolOpenAI || tgt.BaseURL != "http://localhost:11434/v1" ||
 		tgt.Model != "llama3" || tgt.APIKey != "" {
 		t.Fatalf("provider target wrong: %+v", tgt)
+	}
+}
+
+// TestResolveGoogle 验证 google 协议 provider，base_url 缺省（由调用方落 Gemini 官方端点）。
+func TestResolveGoogle(t *testing.T) {
+	writeConfig(t, fixture)
+	t.Setenv("TEST_GEMINI_KEY", "g-from-env")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	tgt, err := cfg.Resolve("gemini/gemini-2.5-pro")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if tgt.Protocol != ProtocolGoogle || tgt.BaseURL != "" ||
+		tgt.Model != "gemini-2.5-pro" || tgt.APIKey != "g-from-env" {
+		t.Fatalf("google target wrong: %+v", tgt)
+	}
+}
+
+// TestResolveBadProtocol 验证未知协议名报错。
+func TestResolveBadProtocol(t *testing.T) {
+	writeConfig(t, `{"providers": {"x": {"base_url": "http://x", "protocol": "grpc"}}}`)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if _, err := cfg.Resolve("x/model-1"); err == nil {
+		t.Fatal("expected error for unknown protocol")
 	}
 }
 

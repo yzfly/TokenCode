@@ -42,7 +42,8 @@ func NewAnthropic(apiKey, baseURL string, bearer bool) *Anthropic {
 	}
 }
 
-func (c *Anthropic) Complete(ctx context.Context, req Request) (Response, error) {
+// buildPayload 组装 /v1/messages 请求体，Complete 与 CompleteStream 共用。
+func (c *Anthropic) buildPayload(req Request) map[string]any {
 	payload := map[string]any{
 		"model":      req.Model,
 		"max_tokens": req.MaxTokens,
@@ -54,15 +55,18 @@ func (c *Anthropic) Complete(ctx context.Context, req Request) (Response, error)
 	if len(req.Tools) > 0 {
 		payload["tools"] = buildTools(req.Tools)
 	}
+	return payload
+}
 
+// post 发出请求并对非 200 统一报错（流式时调用方负责读 body）。
+func (c *Anthropic) post(ctx context.Context, payload map[string]any) (*http.Response, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return Response{}, err
+		return nil, err
 	}
-
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/messages", bytes.NewReader(body))
 	if err != nil {
-		return Response{}, err
+		return nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("anthropic-version", anthropicVersion)
@@ -71,17 +75,25 @@ func (c *Anthropic) Complete(ctx context.Context, req Request) (Response, error)
 	} else {
 		httpReq.Header.Set("x-api-key", c.apiKey)
 	}
-
 	resp, err := c.http.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, fmt.Errorf("llm: http %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	return resp, nil
+}
+
+func (c *Anthropic) Complete(ctx context.Context, req Request) (Response, error) {
+	resp, err := c.post(ctx, c.buildPayload(req))
 	if err != nil {
 		return Response{}, err
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
-
-	if resp.StatusCode != http.StatusOK {
-		return Response{}, fmt.Errorf("llm: http %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
-	}
 
 	var wr struct {
 		Content []struct {
@@ -195,4 +207,131 @@ func buildTools(tools []Tool) []map[string]any {
 		})
 	}
 	return out
+}
+
+// CompleteStream 走 SSE 流式：逐段回调 onDelta，最终组装出与 Complete
+// 相同语义的 Response。事件协议：message_start → content_block_start/
+// content_block_delta/content_block_stop（按 index 多路复用）→
+// message_delta（stop_reason + 输出用量）→ message_stop。
+func (c *Anthropic) CompleteStream(ctx context.Context, req Request, onDelta func(Delta)) (Response, error) {
+	payload := c.buildPayload(req)
+	payload["stream"] = true
+
+	resp, err := c.post(ctx, payload)
+	if err != nil {
+		return Response{}, err
+	}
+	defer resp.Body.Close()
+
+	type block struct {
+		typ  string
+		id   string
+		name string
+		json strings.Builder // tool_use 的 input_json_delta 拼接
+		text strings.Builder // text/thinking 块正文
+	}
+	blocks := map[int]*block{}
+	var order []int
+	out := Response{StopReason: StopOther}
+
+	err = readSSE(resp.Body, func(data string) error {
+		var ev struct {
+			Type    string `json:"type"`
+			Index   int    `json:"index"`
+			Message *struct {
+				Usage struct {
+					InputTokens int `json:"input_tokens"`
+				} `json:"usage"`
+			} `json:"message"`
+			ContentBlock *struct {
+				Type string `json:"type"`
+				ID   string `json:"id"`
+				Name string `json:"name"`
+			} `json:"content_block"`
+			Delta *struct {
+				Type        string `json:"type"`
+				Text        string `json:"text"`
+				Thinking    string `json:"thinking"`
+				PartialJSON string `json:"partial_json"`
+				StopReason  string `json:"stop_reason"`
+			} `json:"delta"`
+			Usage *struct {
+				OutputTokens int `json:"output_tokens"`
+			} `json:"usage"`
+			Error *struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal([]byte(data), &ev); err != nil {
+			return fmt.Errorf("llm: decode stream event: %w", err)
+		}
+
+		switch ev.Type {
+		case "error":
+			msg := "stream error"
+			if ev.Error != nil {
+				msg = ev.Error.Message
+			}
+			return fmt.Errorf("llm: %s", msg)
+		case "message_start":
+			if ev.Message != nil {
+				out.Usage.InputTokens = ev.Message.Usage.InputTokens
+			}
+		case "content_block_start":
+			if ev.ContentBlock != nil {
+				blocks[ev.Index] = &block{typ: ev.ContentBlock.Type, id: ev.ContentBlock.ID, name: ev.ContentBlock.Name}
+				order = append(order, ev.Index)
+			}
+		case "content_block_delta":
+			b := blocks[ev.Index]
+			if b == nil || ev.Delta == nil {
+				return nil
+			}
+			switch ev.Delta.Type {
+			case "text_delta":
+				b.text.WriteString(ev.Delta.Text)
+				if onDelta != nil {
+					onDelta(Delta{Text: ev.Delta.Text})
+				}
+			case "thinking_delta":
+				b.text.WriteString(ev.Delta.Thinking)
+				if onDelta != nil {
+					onDelta(Delta{Thinking: ev.Delta.Thinking})
+				}
+			case "input_json_delta":
+				b.json.WriteString(ev.Delta.PartialJSON)
+			}
+		case "message_delta":
+			if ev.Delta != nil && ev.Delta.StopReason != "" {
+				out.StopReason = normalizeAnthropicStop(ev.Delta.StopReason)
+			}
+			if ev.Usage != nil {
+				out.Usage.OutputTokens = ev.Usage.OutputTokens
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return Response{}, err
+	}
+
+	var text, thinking strings.Builder
+	for _, i := range order {
+		b := blocks[i]
+		switch b.typ {
+		case "text":
+			text.WriteString(b.text.String())
+		case "thinking":
+			thinking.WriteString(b.text.String())
+		case "tool_use":
+			input := b.json.String()
+			if strings.TrimSpace(input) == "" {
+				input = "{}"
+			}
+			out.ToolUses = append(out.ToolUses, ToolUse{ID: b.id, Name: b.name, Input: json.RawMessage(input)})
+		}
+	}
+	out.Text = text.String()
+	out.Thinking = thinking.String()
+	return out, nil
 }

@@ -11,18 +11,32 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/yzfly/tokencode/internal/mcp"
 )
 
-// 协议类型。每种协议对应 internal/llm 里的一个 codec。
+// 协议类型。每种协议对应 internal/llm 里的一个 codec，名字就叫协议名。
 const (
-	ProtocolAnthropic  = "anthropic"
+	ProtocolAnthropic = "anthropic"
+	ProtocolOpenAI    = "openai"
+	ProtocolGoogle    = "google"
+
+	// ProtocolOpenAIChat 是 "openai" 的旧称，Load 时静默归一化，仅为兼容已有 config 保留。
 	ProtocolOpenAIChat = "openai-chat"
 )
+
+// normalizeProtocol 把旧协议名归一到现行名。
+func normalizeProtocol(p string) string {
+	if p == ProtocolOpenAIChat {
+		return ProtocolOpenAI
+	}
+	return p
+}
 
 // Provider 是一个端点条目：baseURL + 协议 + 鉴权。纯配置，不是代码。
 type Provider struct {
 	BaseURL   string `json:"base_url"`
-	Protocol  string `json:"protocol"`    // "anthropic" | "openai-chat"
+	Protocol  string `json:"protocol"`    // "anthropic" | "openai" | "google"
 	APIKey    string `json:"api_key"`     // 直接写 key（不推荐，便于本地试用）
 	APIKeyEnv string `json:"api_key_env"` // 从该环境变量读 key（推荐）
 	Auth      string `json:"auth"`        // anthropic 协议下："bearer" | "x-api-key"（默认）
@@ -30,14 +44,15 @@ type Provider struct {
 
 // Config 是配置文件的全貌。
 type Config struct {
-	Providers    map[string]Provider `json:"providers"`
-	Models       map[string]string   `json:"models"` // 别名 → "provider/model-id"
-	DefaultModel string              `json:"default_model"`
+	Providers    map[string]Provider         `json:"providers"`
+	Models       map[string]string           `json:"models"` // 别名 → "provider/model-id"
+	DefaultModel string                      `json:"default_model"`
+	MCP          map[string]mcp.ServerConfig `json:"mcp"` // MCP server 名 → stdio 配置
 }
 
 // Target 是 -model 解析后的落点：构造 llm 客户端所需的全部信息。
 type Target struct {
-	Protocol string // "anthropic" | "openai-chat"
+	Protocol string // "anthropic" | "openai" | "google"
 	BaseURL  string
 	APIKey   string
 	Bearer   bool   // anthropic 协议下是否用 Authorization: Bearer
@@ -106,15 +121,18 @@ func (c Config) split(full string) (Target, error) {
 	if !ok {
 		return Target{}, fmt.Errorf("未知 provider %q", name)
 	}
-	if p.Protocol != ProtocolAnthropic && p.Protocol != ProtocolOpenAIChat {
-		return Target{}, fmt.Errorf("provider %q: protocol 须为 %q 或 %q", name, ProtocolAnthropic, ProtocolOpenAIChat)
+	proto := normalizeProtocol(p.Protocol)
+	switch proto {
+	case ProtocolAnthropic, ProtocolOpenAI, ProtocolGoogle:
+	default:
+		return Target{}, fmt.Errorf("provider %q: protocol 须为 %q、%q 或 %q", name, ProtocolAnthropic, ProtocolOpenAI, ProtocolGoogle)
 	}
 	key := p.APIKey
 	if key == "" && p.APIKeyEnv != "" {
 		key = os.Getenv(p.APIKeyEnv)
 	}
 	return Target{
-		Protocol: p.Protocol,
+		Protocol: proto,
 		BaseURL:  p.BaseURL,
 		APIKey:   key,
 		Bearer:   p.Auth == "bearer",

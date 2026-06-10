@@ -13,7 +13,10 @@ import (
 	"golang.org/x/term"
 
 	"github.com/yzfly/tokencode/internal/agent"
+	"github.com/yzfly/tokencode/internal/config"
+	"github.com/yzfly/tokencode/internal/mcp"
 	"github.com/yzfly/tokencode/internal/pulse"
+	"github.com/yzfly/tokencode/internal/skill"
 )
 
 // Options 是外壳的装配参数。
@@ -22,16 +25,23 @@ type Options struct {
 	BaseURL string
 	Theme   string // auto|light|dark：auto 自动检测终端背景，light/dark 强制
 	Yolo    bool
+	Notice  string             // 开场提示（如"已恢复会话…"），空=无
 	Events  chan agent.Event   // 事件队列：用户输入与心跳共用，由 Serve 顺序消费
 	Idle    *pulse.IdleTracker // 用户活动追踪，可为 nil
 	Pulse   *pulse.Pulse       // 心跳源，nil=关闭；仅 tty 模式生效
+
+	Cfg         config.Config // /model 列表
+	Skills      []skill.Skill // /skills 与 /技能名
+	MCP         *mcp.Manager  // /mcp 状态，可为 nil
+	SwitchModel func(name string) (model, baseURL string, err error)
+	Version     string // /help 头部显示
 }
 
 // Run 启动外壳。tty 下跑 Bubble Tea；非 tty 退化为纯文本循环
 // （plain 模式直接调 ag.Run、不走事件队列，心跳不生效）。
 func Run(ag *agent.Agent, opts Options) error {
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		return runPlain(ag, opts.Model, opts.BaseURL, opts.Yolo)
+		return runPlain(ag, opts)
 	}
 	theme, yolo := opts.Theme, opts.Yolo
 
@@ -55,6 +65,12 @@ func Run(ag *agent.Agent, opts Options) error {
 	perms := newPerms(initial)
 
 	m := newModel(opts.Events, opts.Idle, perms, opts.Model, opts.BaseURL)
+	m.cfg, m.skills, m.mcp, m.switchModel = opts.Cfg, opts.Skills, opts.MCP, opts.SwitchModel
+	m.version = opts.Version
+	if opts.Notice != "" {
+		m.transcript = append(m.transcript, transItem{kind: tNote, text: opts.Notice})
+		m.rendered = append(m.rendered, m.renderItem(transItem{kind: tNote, text: opts.Notice}))
+	}
 	// 接管全屏：resize 整屏干净重排；开鼠标以支持滚轮滚动对话。
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
@@ -75,10 +91,29 @@ func Run(ag *agent.Agent, opts Options) error {
 }
 
 // runPlain 是非 tty（管道/重定向）下的极简纯文本回退，不进 Bubble Tea。
-func runPlain(ag *agent.Agent, modelName, baseURL string, yolo bool) error {
+func runPlain(ag *agent.Agent, opts Options) error {
+	modelName, baseURL, yolo := opts.Model, opts.BaseURL, opts.Yolo
 	fmt.Printf("TokenCode · model=%s · base=%s\n", modelName, baseURL)
+	if opts.Notice != "" {
+		fmt.Println(opts.Notice)
+	}
+	streamed := false // 本次完成是否已流式打印过（避免 OnAssistant 重复输出）
 	ui := agent.UI{
-		OnAssistant: func(t string) { fmt.Printf("\n%s\n", strings.TrimSpace(t)) },
+		OnAssistantDelta: func(d string) {
+			if !streamed {
+				fmt.Println()
+				streamed = true
+			}
+			fmt.Print(d)
+		},
+		OnAssistant: func(t string) {
+			if streamed {
+				fmt.Println()
+				streamed = false
+				return
+			}
+			fmt.Printf("\n%s\n", strings.TrimSpace(t))
+		},
 		OnToolCall: func(name string, input json.RawMessage) bool {
 			fmt.Printf("  → %s %s\n", name, oneLine(compactJSON(input), 120))
 			return yolo || name == "read" // 非交互：只读放行，其余除非 -yolo 否则拒绝

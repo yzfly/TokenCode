@@ -68,6 +68,8 @@ func (a *Agent) serveOne(ctx context.Context, ev Event, ui UI) {
 	turnUI := ui
 	if ev.Ephemeral {
 		// 空转哨兵不上屏：只拦显示，历史的剔除在 turn 结束后做。
+		// 增量也关掉——哨兵不该一个字一个字地流到屏幕上。
+		turnUI.OnAssistantDelta = nil
 		inner := ui.OnAssistant
 		turnUI.OnAssistant = func(text string) {
 			if strings.TrimSpace(text) == Sentinel {
@@ -88,6 +90,8 @@ func (a *Agent) serveOne(ctx context.Context, ev Event, ui UI) {
 			a.dropIfIdleTurn(before)
 		}
 	}
+	// 持久化放在剔除之后：被剔除的拍从未落盘。
+	a.flushPersist()
 
 	if ui.OnTurnDone != nil {
 		ui.OnTurnDone(ev.Source, err)

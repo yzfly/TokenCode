@@ -1,7 +1,8 @@
 // Package llm 是 TokenCode 的 LLM provider 抽象。
 // 内部用 Anthropic Messages API 的语义（content block + tool_use/tool_result + stop_reason）。
-// 实现有两个 codec：Anthropic 协议（默认指向 DeepSeek 的 /anthropic 端点）
-// 与 OpenAI Chat Completions 协议（DeepSeek/Kimi/Qwen/Ollama 等通用）。
+// 一个协议一个 codec，模块按协议命名：anthropic（默认指向 DeepSeek 的 /anthropic 端点）、
+// openai（Chat Completions，DeepSeek/Kimi/Qwen/Ollama/OpenRouter 等通用）、
+// google（Gemini generateContent）。
 package llm
 
 import (
@@ -84,4 +85,17 @@ type Response struct {
 // LLM 是 provider 抽象。
 type LLM interface {
 	Complete(ctx context.Context, req Request) (Response, error)
+}
+
+// Delta 是流式生成过程中的一段增量。
+type Delta struct {
+	Text     string // 正文增量
+	Thinking string // 推理增量
+}
+
+// Streamer 是 codec 的可选流式能力。实现者在生成过程中逐段回调 onDelta
+// （onDelta 可为 nil，表示调用方只要最终结果），最终返回与 Complete 语义
+// 完全相同的 Response——调用方（agent 循环）对两条路径零差别。
+type Streamer interface {
+	CompleteStream(ctx context.Context, req Request, onDelta func(Delta)) (Response, error)
 }
