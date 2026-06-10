@@ -1,0 +1,18 @@
+# TokenCode 本地构建产物
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+.DS_Store
+
+# 本地私有内容（密钥、草稿、内部设计与计划等），不进仓库
+/temp/
+/docs/
+*.log
+
+# Claude Code 本地会话数据
+.claude/
+
+# agent 本地记忆与待办（做梦机制的输出，因人而异）
+.tokencode/

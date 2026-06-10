@@ -1,0 +1,123 @@
+// Package config 是 TokenCode 的模型注册表：providers（端点）+ models（别名）。
+// 只读一处文件：$XDG_CONFIG_HOME/tokencode/config.json（未设 XDG 时 ~/.config/tokencode/config.json）。
+// 文件不存在不是错误——零值 config 下行为与无 config 时代完全一致。
+package config
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+// 协议类型。每种协议对应 internal/llm 里的一个 codec。
+const (
+	ProtocolAnthropic  = "anthropic"
+	ProtocolOpenAIChat = "openai-chat"
+)
+
+// Provider 是一个端点条目：baseURL + 协议 + 鉴权。纯配置，不是代码。
+type Provider struct {
+	BaseURL   string `json:"base_url"`
+	Protocol  string `json:"protocol"`    // "anthropic" | "openai-chat"
+	APIKey    string `json:"api_key"`     // 直接写 key（不推荐，便于本地试用）
+	APIKeyEnv string `json:"api_key_env"` // 从该环境变量读 key（推荐）
+	Auth      string `json:"auth"`        // anthropic 协议下："bearer" | "x-api-key"（默认）
+}
+
+// Config 是配置文件的全貌。
+type Config struct {
+	Providers    map[string]Provider `json:"providers"`
+	Models       map[string]string   `json:"models"` // 别名 → "provider/model-id"
+	DefaultModel string              `json:"default_model"`
+}
+
+// Target 是 -model 解析后的落点：构造 llm 客户端所需的全部信息。
+type Target struct {
+	Protocol string // "anthropic" | "openai-chat"
+	BaseURL  string
+	APIKey   string
+	Bearer   bool   // anthropic 协议下是否用 Authorization: Bearer
+	Model    string // 实际发给端点的 model id
+	Default  bool   // true 表示未命中 config，走默认 provider（调用方按现状兜底）
+}
+
+// Path 返回配置文件路径。
+func Path() string {
+	if x := os.Getenv("XDG_CONFIG_HOME"); x != "" {
+		return filepath.Join(x, "tokencode", "config.json")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".config", "tokencode", "config.json")
+}
+
+// Load 读取配置。文件不存在时返回零值 config（不是错误）。
+func Load() (Config, error) {
+	p := Path()
+	if p == "" {
+		return Config{}, nil
+	}
+	raw, err := os.ReadFile(p)
+	if errors.Is(err, fs.ErrNotExist) {
+		return Config{}, nil
+	}
+	if err != nil {
+		return Config{}, err
+	}
+	var c Config
+	if err := json.Unmarshal(raw, &c); err != nil {
+		return Config{}, fmt.Errorf("config: parse %s: %w", p, err)
+	}
+	return c, nil
+}
+
+// Resolve 解析 -model 参数。解析顺序：
+// ① models 别名 → ② "provider/model-id" 语法（前缀须是已知 provider）→ ③ 原样直传（Default=true）。
+func (c Config) Resolve(model string) (Target, error) {
+	if full, ok := c.Models[model]; ok {
+		t, err := c.split(full)
+		if err != nil {
+			return Target{}, fmt.Errorf("config: 别名 %q → %q: %w", model, full, err)
+		}
+		return t, nil
+	}
+	if i := strings.Index(model, "/"); i > 0 {
+		if _, ok := c.Providers[model[:i]]; ok {
+			return c.split(model)
+		}
+	}
+	return Target{Protocol: ProtocolAnthropic, Model: model, Default: true}, nil
+}
+
+// split 把 "provider/model-id" 拆开并装配 Target。
+func (c Config) split(full string) (Target, error) {
+	i := strings.Index(full, "/")
+	if i <= 0 || i == len(full)-1 {
+		return Target{}, fmt.Errorf("不是 provider/model-id 形式")
+	}
+	name, modelID := full[:i], full[i+1:]
+	p, ok := c.Providers[name]
+	if !ok {
+		return Target{}, fmt.Errorf("未知 provider %q", name)
+	}
+	if p.Protocol != ProtocolAnthropic && p.Protocol != ProtocolOpenAIChat {
+		return Target{}, fmt.Errorf("provider %q: protocol 须为 %q 或 %q", name, ProtocolAnthropic, ProtocolOpenAIChat)
+	}
+	key := p.APIKey
+	if key == "" && p.APIKeyEnv != "" {
+		key = os.Getenv(p.APIKeyEnv)
+	}
+	return Target{
+		Protocol: p.Protocol,
+		BaseURL:  p.BaseURL,
+		APIKey:   key,
+		Bearer:   p.Auth == "bearer",
+		Model:    modelID,
+	}, nil
+}
