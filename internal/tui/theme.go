@@ -45,9 +45,10 @@ var (
 	labelStyle = lipgloss.NewStyle().Foreground(accent).Bold(true)
 	valueStyle = lipgloss.NewStyle().Foreground(inkColor)
 
-	// 模式徽标：plan 蓝、review 绿、yolo 红（醒目，提示有风险）。
+	// 模式徽标：plan 蓝、review 绿、auto 琥珀（半自动，提示留意）、yolo 红（醒目，提示有风险）。
 	planBadge   = lipgloss.NewStyle().Foreground(accent).Bold(true)
 	reviewBadge = lipgloss.NewStyle().Foreground(okColor)
+	autoBadge   = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#B45309", Dark: "#F59E0B"}).Bold(true)
 	yoloBadge   = lipgloss.NewStyle().Foreground(errColor).Bold(true)
 
 	// 工具确认框：醒目——蓝色边框 + 反色徽标 + 高亮按键。
@@ -59,6 +60,18 @@ var (
 
 	// 折叠的历史工具执行提示。
 	collapseStyle = lipgloss.NewStyle().Foreground(dimColor).Italic(true)
+
+	// / 补全菜单：命令名蓝、参数提示与摘要灰阶分层；
+	// 选中行 accent 指示符 + 随明暗的浅色底（整行反色太刺眼）。
+	menuSelBg        = lipgloss.AdaptiveColor{Light: "#E8EDFF", Dark: "#252D45"}
+	menuCursorStyle  = lipgloss.NewStyle().Foreground(accent).Bold(true).Background(menuSelBg)
+	menuNameStyle    = lipgloss.NewStyle().Foreground(accent)
+	menuNameSelStyle = lipgloss.NewStyle().Foreground(accent).Bold(true).Background(menuSelBg)
+	menuHintStyle    = lipgloss.NewStyle().Foreground(dimColor)
+	menuHintSelStyle = lipgloss.NewStyle().Foreground(dimColor).Background(menuSelBg)
+	menuSumStyle     = lipgloss.NewStyle().Foreground(dimColor)
+	menuSumSelStyle  = lipgloss.NewStyle().Foreground(inkColor).Background(menuSelBg)
+	menuSelFill      = lipgloss.NewStyle().Background(menuSelBg)
 )
 
 // modeBadge 返回带色的模式标签，用于状态栏。
@@ -66,6 +79,8 @@ func modeBadge(m permMode) string {
 	switch m {
 	case modePlan:
 		return planBadge.Render("plan")
+	case modeAuto:
+		return autoBadge.Render("auto")
 	case modeYolo:
 		return yoloBadge.Render("yolo")
 	default:

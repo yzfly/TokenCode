@@ -2,12 +2,13 @@ package tui
 
 import "sync"
 
-// permMode 是权限模式。循环顺序 plan → review → yolo → plan。
+// permMode 是权限模式。循环顺序 plan → review → auto → yolo → plan。
 type permMode int
 
 const (
 	modePlan   permMode = iota // 只读：read 之外一律拒绝
 	modeReview                 // 默认：写类工具逐次确认（y/n/a）
+	modeAuto                   // 小模型按规则状态裁决，裁决失败落回人工确认
 	modeYolo                   // 全放行
 )
 
@@ -47,7 +48,7 @@ func (p *perms) setMode(m permMode) {
 func (p *perms) cycle() permMode {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.mode = (p.mode + 1) % 3
+	p.mode = (p.mode + 1) % 4
 	return p.mode
 }
 
@@ -58,6 +59,7 @@ func (p *perms) rememberAlways(tool string) {
 }
 
 // decide 裁决一次工具调用。read 永远放行；其余看模式。
+// auto 与 review 同样返回 permConfirm——由 bridge 决定确认走人还是走小模型。
 func (p *perms) decide(tool string) permDecision {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -69,7 +71,7 @@ func (p *perms) decide(tool string) permDecision {
 		return permAllow
 	case modePlan:
 		return permReject
-	default: // modeReview
+	default: // modeReview / modeAuto
 		if p.allow[tool] {
 			return permAllow
 		}
@@ -81,6 +83,8 @@ func (m permMode) label() string {
 	switch m {
 	case modePlan:
 		return "plan"
+	case modeAuto:
+		return "auto"
 	case modeYolo:
 		return "yolo"
 	default:

@@ -3,10 +3,14 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/yzfly/tokencode/internal/agent"
 	"github.com/yzfly/tokencode/internal/config"
@@ -15,8 +19,10 @@ import (
 	"github.com/yzfly/tokencode/internal/pulse"
 	"github.com/yzfly/tokencode/internal/session"
 	"github.com/yzfly/tokencode/internal/skill"
+	"github.com/yzfly/tokencode/internal/subagent"
 	"github.com/yzfly/tokencode/internal/tools"
 	"github.com/yzfly/tokencode/internal/tui"
+	"github.com/yzfly/tokencode/internal/workflow"
 )
 
 // version 是构建版本（后续经 -ldflags "-X main.version=..." 注入）。
@@ -32,6 +38,7 @@ func main() {
 	cont := flag.Bool("continue", false, "继续当前目录最近一次会话")
 	resumeID := flag.String("resume", "", "按会话 id 恢复（tokencode -resume <id>）")
 	noSession := flag.Bool("no-session", false, "本次会话不落盘")
+	workspaceMode := flag.Bool("workspace", false, "工作空间隔离：文件工具只允许访问当前目录之内（含符号链接解析）")
 	flag.Parse()
 
 	cfg, err := config.Load()
@@ -69,8 +76,31 @@ func main() {
 		cwd = "."
 	}
 
+	if *workspaceMode {
+		if err := tools.SetWorkspace(cwd); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+	}
+
 	reg := tools.NewRegistry(tools.Read(), tools.Write(), tools.Edit(), tools.Bash())
 	ag := agent.New(client, reg, tgt.Model, *maxTokens)
+
+	// 子代理与动态工作流：与主 agent 共享注册表、客户端（跟随 /model 热切换）。
+	runner := subagent.NewRunner(ag.Client, reg, *maxTokens, subagent.Discover(cwd))
+	runner.Resolve = func(name string) (llm.LLM, string, error) {
+		t, err := cfg.Resolve(name)
+		if err != nil {
+			return nil, "", err
+		}
+		c, _, err := buildClient(t, "")
+		if err != nil {
+			return nil, "", err
+		}
+		return c, t.Model, nil
+	}
+	reg.Add(subagent.NewTool(runner))
+	reg.Add(workflow.NewTool(runner))
 
 	// MCP server 后台连接（绝不阻塞启动）；技能只读 frontmatter，启动开销极小。
 	var mcpMgr *mcp.Manager
@@ -105,18 +135,21 @@ func main() {
 	}
 
 	err = tui.Run(ag, tui.Options{
-		Model:   tgt.Model,
-		BaseURL: effBaseURL,
-		Theme:   *theme,
-		Yolo:    *yolo,
-		Notice:  notice,
-		Events:  events,
-		Idle:    idle,
-		Pulse:   pl,
-		Cfg:     cfg,
-		Skills:  skills,
-		MCP:     mcpMgr,
-		Version: version,
+		Model:     tgt.Model,
+		BaseURL:   effBaseURL,
+		Theme:     *theme,
+		Yolo:      *yolo,
+		Notice:    notice,
+		Events:    events,
+		Idle:      idle,
+		Pulse:     pl,
+		Cfg:       cfg,
+		Skills:    skills,
+		MCP:       mcpMgr,
+		Agents:    runner,
+		AutoJudge: makeAutoJudge(cfg, ag),
+		Workspace: tools.WorkspaceRoot(),
+		Version:   version,
 		SwitchModel: func(name string) (string, string, error) {
 			t, err := cfg.Resolve(name)
 			if err != nil {
@@ -176,6 +209,78 @@ func setupSession(ag *agent.Agent, model string, cont bool, resumeID string, noS
 	}
 	ag.SetPersist(store.Append)
 	return "", store, nil
+}
+
+// makeAutoJudge 构造 auto 模式的权限裁决器：用小模型（config 的 auto_model，
+// 未配置时复用主模型）按当前规则状态判定一次工具调用。解析失败返回 err，
+// bridge 落回人工确认——裁决器永远不该比人工模式更宽松地放行。
+func makeAutoJudge(cfg config.Config, ag *agent.Agent) tui.AutoJudge {
+	var judgeClient llm.LLM
+	var judgeModel string
+	if cfg.AutoModel != "" {
+		if t, err := cfg.Resolve(cfg.AutoModel); err == nil {
+			if c, _, err := buildClient(t, ""); err == nil {
+				judgeClient, judgeModel = c, t.Model
+			}
+		}
+	}
+	return func(name string, input json.RawMessage) (bool, string, error) {
+		client, model := judgeClient, judgeModel
+		if client == nil {
+			client, model = ag.Client()
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		resp, err := client.Complete(ctx, llm.Request{
+			Model:  model,
+			System: autoJudgeSystem(),
+			Messages: []llm.Message{{
+				Role: llm.RoleUser,
+				Text: fmt.Sprintf("tool: %s\ninput: %s", name, input),
+			}},
+			MaxTokens: 128,
+		})
+		if err != nil {
+			return false, "", err
+		}
+		verdict := strings.TrimSpace(resp.Text)
+		switch upper := strings.ToUpper(verdict); {
+		case strings.HasPrefix(upper, "ALLOW"):
+			return true, strings.TrimSpace(verdict[len("ALLOW"):]), nil
+		case strings.HasPrefix(upper, "DENY"):
+			return false, strings.TrimSpace(verdict[len("DENY"):]), nil
+		}
+		return false, "", fmt.Errorf("裁决输出无法解析：%.60s", verdict)
+	}
+}
+
+// autoJudgeSystem 按当前规则状态组装裁决提示：工作目录、工作空间隔离、
+// 用户自定义规则（.tokencode/permissions.md，存在时最高优先）。
+func autoJudgeSystem() string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = "."
+	}
+	ws := "未开启（无路径硬限制，更要从严）"
+	if r := tools.WorkspaceRoot(); r != "" {
+		ws = "已开启，文件工具已被硬限制在 " + r + " 之内"
+	}
+	rules := ""
+	if b, err := os.ReadFile(".tokencode/permissions.md"); err == nil && strings.TrimSpace(string(b)) != "" {
+		rules = "\n\n用户自定义规则（优先于上面的默认规则）：\n" + strings.TrimSpace(string(b))
+	}
+	return fmt.Sprintf(`你是编码 agent 的权限裁决器，判断一次工具调用能否自动放行。
+
+当前规则状态：
+- 工作目录：%s
+- 工作空间隔离：%s
+
+默认规则：
+- ALLOW：工作目录内的文件写入与修改；构建/测试/格式化/静态检查；git 只读操作（status/diff/log/show）；包管理器与系统信息的查询类命令。
+- DENY：删除大范围文件或目录；写工作目录之外；git push、commit --amend、reset --hard 等改写历史或对外发布；安装/卸载软件；修改系统配置；下载并执行内容；任何不可逆或影响外部世界的操作。
+- 拿不准一律 DENY。%s
+
+只回一行：ALLOW <一句话理由> 或 DENY <一句话理由>`, cwd, ws, rules)
 }
 
 // pulseLogf 返回心跳 debug 日志的去向：TOKENCODE_PULSE_LOG 指定文件时写入，

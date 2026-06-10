@@ -37,10 +37,17 @@ func (m model) commands() []command {
 			}},
 		{name: "mcp", argHint: "[reconnect <server>]", summary: "MCP server 状态与重连",
 			run: func(m model, args string) (tea.Model, tea.Cmd) { return m.cmdMCP(args) }},
+		{name: "agents", summary: "列出可用的子代理类型",
+			run: func(m model, _ string) (tea.Model, tea.Cmd) {
+				m.emit(transItem{kind: tNote, text: m.agentsText()})
+				return m, nil
+			}},
 		{name: "plan", summary: "切到只读模式",
 			run: func(m model, _ string) (tea.Model, tea.Cmd) { return m.setMode("plan") }},
 		{name: "review", summary: "切到逐次确认模式（默认）",
 			run: func(m model, _ string) (tea.Model, tea.Cmd) { return m.setMode("review") }},
+		{name: "auto", summary: "切到小模型自动裁决模式",
+			run: func(m model, _ string) (tea.Model, tea.Cmd) { return m.setMode("auto") }},
 		{name: "yolo", summary: "切到全放行模式",
 			run: func(m model, _ string) (tea.Model, tea.Cmd) { return m.setMode("yolo") }},
 		{name: "exit", aliases: []string{"quit"}, summary: "退出（同 Ctrl-D）",
@@ -130,7 +137,7 @@ func (m model) submitMessage(text string) (tea.Model, tea.Cmd) {
 	if m.idle != nil {
 		m.idle.Touch()
 	}
-	return m, m.sendCmd(text)
+	return m, m.sendCmd(m.takeShellCtx(text))
 }
 
 // suggestCommand 给拼错的命令找最近candidate：前缀命中优先，其次编辑距离 ≤2。
@@ -213,19 +220,20 @@ func (m model) helpText() string {
 		if c.argHint != "" {
 			name += " " + c.argHint
 		}
-		fmt.Fprintf(&b, "  %-28s %s\n", name, c.summary)
+		fmt.Fprintf(&b, "  %s %s\n", padCell(name, 28), c.summary)
 	}
 	if len(m.skills) > 0 {
 		b.WriteString("\n技能（/技能名 [参数] 调用）\n")
 		for _, s := range m.skills {
-			fmt.Fprintf(&b, "  %-28s %s\n", "/"+s.Name, s.Description)
+			fmt.Fprintf(&b, "  %s %s\n", padCell("/"+s.Name, 28), s.Description)
 		}
 	}
 	if m.mcp != nil {
 		b.WriteString("\nMCP：/mcp 查看 server 状态，工具以 mcp__server__tool 自动可用\n")
 	}
-	b.WriteString("\n快捷键\n")
-	b.WriteString("  ⏎ 发送 · Alt+⏎ 换行 · ⇧⇥ 循环权限模式 · ↑↓ 输入历史\n")
+	b.WriteString("\n快捷键与直通\n")
+	b.WriteString("  ⏎ 发送 · Alt+⏎ 换行 · ⇧⇥ 循环权限模式（plan→review→auto→yolo）· ↑↓ 输入历史\n")
+	b.WriteString("  ! <命令> 直接跑 shell（输出随下一条消息进上下文）· !! 与 // 转义\n")
 	b.WriteString("  PgUp/PgDn/滚轮 滚动 · Ctrl+T 展开/折叠工具执行 · Ctrl+C 打断/退出 · Ctrl+D 退出")
 	return b.String()
 }
@@ -281,6 +289,25 @@ func (m model) cmdModel(args string) (tea.Model, tea.Cmd) {
 	m.emit(transItem{kind: tNote, text: fmt.Sprintf("→ 模型：%s（%s）", newModel, newBase)})
 	m.rebuildContent() // banner 里有模型名，整体重排一次
 	return m, nil
+}
+
+// agentsText 拼 /agents 输出：可用子代理类型与各自的工具面。
+func (m model) agentsText() string {
+	if len(m.agentDefs) == 0 {
+		return "无子代理可用（agent 工具未装配）"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "子代理类型（%d 个）· 模型经 agent 工具委托、workflow 工具编排\n", len(m.agentDefs))
+	for _, d := range m.agentDefs {
+		toolSet := "全工具"
+		if len(d.Tools) > 0 {
+			toolSet = strings.Join(d.Tools, ",")
+		}
+		fmt.Fprintf(&b, "  %s %s\n%s工具：%s · 来源：%s\n",
+			padCell(d.Name, 18), d.Description, strings.Repeat(" ", 21), toolSet, d.Source)
+	}
+	b.WriteString("\n自定义：.tokencode/agents/ 或 .claude/agents/ 下的 *.md（frontmatter: name/description/tools/model，正文=系统提示）")
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // skillsText 拼 /skills 输出（REQ-3）。

@@ -47,10 +47,24 @@ func TestPermsCycle(t *testing.T) {
 	if got := p.cycle(); got != modeReview {
 		t.Fatalf("plan→review, got %v", got)
 	}
+	if got := p.cycle(); got != modeAuto {
+		t.Fatalf("review→auto, got %v", got)
+	}
 	if got := p.cycle(); got != modeYolo {
-		t.Fatalf("review→yolo, got %v", got)
+		t.Fatalf("auto→yolo, got %v", got)
 	}
 	if got := p.cycle(); got != modePlan {
 		t.Fatalf("yolo→plan (wrap), got %v", got)
+	}
+}
+
+func TestPermsAutoDecide(t *testing.T) {
+	// auto 与 review 同样返回 permConfirm（bridge 决定走小模型还是人工）。
+	p := newPerms(modeAuto)
+	if p.decide("write") != permConfirm {
+		t.Fatal("auto: write should map to permConfirm")
+	}
+	if p.decide("read") != permAllow {
+		t.Fatal("auto: read should be allowed")
 	}
 }

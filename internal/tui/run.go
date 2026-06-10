@@ -17,6 +17,7 @@ import (
 	"github.com/yzfly/tokencode/internal/mcp"
 	"github.com/yzfly/tokencode/internal/pulse"
 	"github.com/yzfly/tokencode/internal/skill"
+	"github.com/yzfly/tokencode/internal/subagent"
 )
 
 // Options 是外壳的装配参数。
@@ -30,9 +31,12 @@ type Options struct {
 	Idle    *pulse.IdleTracker // 用户活动追踪，可为 nil
 	Pulse   *pulse.Pulse       // 心跳源，nil=关闭；仅 tty 模式生效
 
-	Cfg         config.Config // /model 列表
-	Skills      []skill.Skill // /skills 与 /技能名
-	MCP         *mcp.Manager  // /mcp 状态，可为 nil
+	Cfg         config.Config    // /model 列表
+	Skills      []skill.Skill    // /skills 与 /技能名
+	MCP         *mcp.Manager     // /mcp 状态，可为 nil
+	Agents      *subagent.Runner // 子代理运行器，可为 nil；外壳启动时注入 UI 工厂
+	AutoJudge   AutoJudge        // auto 模式权限裁决器，可为 nil
+	Workspace   string           // 工作空间隔离根（显示用）；空=未开启
 	SwitchModel func(name string) (model, baseURL string, err error)
 	Version     string // /help 头部显示
 }
@@ -66,7 +70,10 @@ func Run(ag *agent.Agent, opts Options) error {
 
 	m := newModel(opts.Events, opts.Idle, perms, opts.Model, opts.BaseURL)
 	m.cfg, m.skills, m.mcp, m.switchModel = opts.Cfg, opts.Skills, opts.MCP, opts.SwitchModel
-	m.version = opts.Version
+	m.version, m.workspace = opts.Version, opts.Workspace
+	if opts.Agents != nil {
+		m.agentDefs = opts.Agents.Defs()
+	}
 	if opts.Notice != "" {
 		m.transcript = append(m.transcript, transItem{kind: tNote, text: opts.Notice})
 		m.rendered = append(m.rendered, m.renderItem(transItem{kind: tNote, text: opts.Notice}))
@@ -74,8 +81,14 @@ func Run(ag *agent.Agent, opts Options) error {
 	// 接管全屏：resize 整屏干净重排；开鼠标以支持滚轮滚动对话。
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
-	br := &bridge{prog: p, perms: perms}
+	br := &bridge{prog: p, perms: perms, judge: opts.AutoJudge}
 	ui := br.UI()
+
+	// 子代理与工作流接同一座桥：权限闸门、转写显示与主 agent 完全同源。
+	if opts.Agents != nil {
+		opts.Agents.UI = br.SubUI
+		opts.Agents.Log = func(text string) { p.Send(noteMsg{text: "wf · " + text}) }
+	}
 
 	// actor：Serve 顺序消费事件队列（用户输入 + 心跳），所有回调经 program.Send 投递。
 	// per-turn 的 cancel 由 Serve 造、经 runStartedMsg 交给 model（打断语义不变）。
@@ -96,6 +109,18 @@ func runPlain(ag *agent.Agent, opts Options) error {
 	fmt.Printf("TokenCode · model=%s · base=%s\n", modelName, baseURL)
 	if opts.Notice != "" {
 		fmt.Println(opts.Notice)
+	}
+	// 子代理在 plain 模式下沿用同一条非交互策略：只读放行，其余看 -yolo。
+	if opts.Agents != nil {
+		opts.Agents.UI = func(label string) agent.UI {
+			return agent.UI{
+				OnToolCall: func(name string, input json.RawMessage) bool {
+					fmt.Printf("  → [%s] %s %s\n", label, name, oneLine(compactJSON(input), 120))
+					return yolo || name == "read"
+				},
+			}
+		}
+		opts.Agents.Log = func(text string) { fmt.Println("  wf ·", text) }
 	}
 	streamed := false // 本次完成是否已流式打印过（避免 OnAssistant 重复输出）
 	ui := agent.UI{

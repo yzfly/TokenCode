@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -11,14 +12,18 @@ import (
 
 // 在 worker goroutine 与 Bubble Tea 事件循环之间传递的消息类型。
 // worker 只发原始数据，所有渲染在 Update 里单线程完成。
+// agent 字段是子代理标签（空=主 agent）。
 type (
 	assistantMsg      struct{ text string }
 	assistantDeltaMsg struct{ text string }
+	noteMsg           struct{ text string }
 	toolCallMsg       struct {
+		agent string
 		name  string
 		input json.RawMessage
 	}
 	toolResultMsg struct {
+		agent  string
 		name   string
 		result string
 		isErr  bool
@@ -34,25 +39,30 @@ type (
 	}
 
 	// confirmReqMsg 由 worker 发出后阻塞等 reply；Model 显示确认、收键后写回。
+	// 子代理并行时可能同时有多个在途，Model 排队逐个确认。
 	confirmReqMsg struct {
+		agent string
 		name  string
 		input json.RawMessage
 		reply chan confirmChoice
 	}
 )
 
+// AutoJudge 是 auto 模式的权限裁决器：根据规则状态判定一次工具调用，
+// 返回是否放行与一句理由。err 非 nil 时落回人工确认。
+type AutoJudge func(name string, input json.RawMessage) (allow bool, reason string, err error)
+
 // bridge 持有 program 引用与共享权限状态，构造 agent 所需的 UI 回调。
 type bridge struct {
 	prog  *tea.Program
 	perms *perms
+	judge AutoJudge // auto 模式裁决器，可为 nil（nil 时 auto 退化为人工确认）
 	// src 是当前 turn 的来源。所有回调都来自 Serve 的 actor goroutine
 	// 且 OnTurnStart 先于该 turn 的其它回调，因此普通字段即安全。
 	src agent.EventSource
 }
 
-// UI 把 agent 的回调全部转成 program.Send。
-// 工具确认只对用户来源走阻塞 channel 会合；心跳/梦等非交互来源没人按键，
-// 走自动策略（只读放行、写类一律拒绝），绝不阻塞在 reply 上。
+// UI 把主 agent 的回调全部转成 program.Send。
 func (b *bridge) UI() agent.UI {
 	return agent.UI{
 		OnTurnStart: func(source agent.EventSource, cancel context.CancelFunc) {
@@ -69,33 +79,62 @@ func (b *bridge) UI() agent.UI {
 				b.prog.Send(assistantDeltaMsg{text})
 			}
 		},
-		OnToolCall: func(name string, input json.RawMessage) bool {
-			b.prog.Send(toolCallMsg{name, input})
-			if b.src != agent.SourceUser {
-				return name == "read" // v1 从严：非交互 turn 只许只读
-			}
-			switch b.perms.decide(name) {
-			case permAllow:
-				return true
-			case permReject:
-				return false
-			default: // permConfirm
-				reply := make(chan confirmChoice, 1)
-				b.prog.Send(confirmReqMsg{name: name, input: input, reply: reply})
-				switch <-reply {
-				case choiceAllowAlways:
-					b.perms.rememberAlways(name)
-					return true
-				case choiceAllowOnce:
-					return true
-				default:
-					return false
-				}
-			}
-		},
+		OnToolCall:   func(name string, input json.RawMessage) bool { return b.gateTool("", name, input) },
+		OnToolResult: func(name, result string, isErr bool) { b.prog.Send(toolResultMsg{"", name, result, isErr}) },
+		OnThinking:   func(active bool) { b.prog.Send(thinkingMsg{active}) },
+	}
+}
+
+// SubUI 构造子代理的 UI 回调：工具调用走与主 agent 同一套权限闸门，
+// 显示带子代理标签；文本/spinner 不上屏（最终文本作为工具结果返回主 agent）。
+func (b *bridge) SubUI(label string) agent.UI {
+	return agent.UI{
+		OnToolCall: func(name string, input json.RawMessage) bool { return b.gateTool(label, name, input) },
 		OnToolResult: func(name, result string, isErr bool) {
-			b.prog.Send(toolResultMsg{name, result, isErr})
+			b.prog.Send(toolResultMsg{label, name, result, isErr})
 		},
-		OnThinking: func(active bool) { b.prog.Send(thinkingMsg{active}) },
+	}
+}
+
+// gateTool 是工具调用的权限闸门（主 agent 与子代理共用）。
+// 非交互来源（心跳/梦）只许只读；交互来源按模式裁决，
+// 需要确认时：auto 模式先问小模型，失败或非 auto 走阻塞式人工确认。
+// 子代理并行时多个确认请求各自带 reply channel，Model 排队逐个处理。
+func (b *bridge) gateTool(label, name string, input json.RawMessage) bool {
+	b.prog.Send(toolCallMsg{label, name, input})
+	if b.src != agent.SourceUser {
+		return name == "read" // v1 从严：非交互 turn 只许只读
+	}
+	switch b.perms.decide(name) {
+	case permAllow:
+		return true
+	case permReject:
+		return false
+	}
+
+	// permConfirm
+	if b.perms.current() == modeAuto && b.judge != nil {
+		allow, reason, err := b.judge(name, input)
+		if err == nil {
+			mark := "✗ 拒绝"
+			if allow {
+				mark = "✓ 放行"
+			}
+			b.prog.Send(noteMsg{text: fmt.Sprintf("auto %s %s · %s", mark, name, reason)})
+			return allow
+		}
+		b.prog.Send(noteMsg{text: "auto 裁决失败（" + err.Error() + "），转人工确认"})
+	}
+
+	reply := make(chan confirmChoice, 1)
+	b.prog.Send(confirmReqMsg{agent: label, name: name, input: input, reply: reply})
+	switch <-reply {
+	case choiceAllowAlways:
+		b.perms.rememberAlways(name)
+		return true
+	case choiceAllowOnce:
+		return true
+	default:
+		return false
 	}
 }

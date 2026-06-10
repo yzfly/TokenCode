@@ -19,6 +19,7 @@ import (
 	"github.com/yzfly/tokencode/internal/mcp"
 	"github.com/yzfly/tokencode/internal/pulse"
 	"github.com/yzfly/tokencode/internal/skill"
+	"github.com/yzfly/tokencode/internal/subagent"
 )
 
 type uiState int
@@ -43,6 +44,7 @@ const (
 	tToolResult
 	tNote
 	tErr
+	tShell // ! 命令的输出（name=命令，text=输出，result=退出码）
 )
 
 // transItem 是一条可重渲染的对话项（存原始数据，不存样式化字符串，
@@ -51,6 +53,7 @@ type transItem struct {
 	kind   transKind
 	text   string
 	name   string
+	agent  string // 子代理标签；空=主 agent
 	input  json.RawMessage
 	result string
 	isErr  bool
@@ -69,6 +72,7 @@ type model struct {
 	state    uiState
 	thinking bool
 	pending  *confirmReqMsg
+	pendingQ []confirmReqMsg // 子代理并行时排队的后续确认请求
 	cancel   context.CancelFunc
 
 	history []string
@@ -81,9 +85,11 @@ type model struct {
 	modelName string
 	baseURL   string
 
-	cfg         config.Config // /model 列表用
-	skills      []skill.Skill // /skills 列表与 /技能名 调用
-	mcp         *mcp.Manager  // /mcp 状态，可为 nil
+	cfg         config.Config  // /model 列表用
+	skills      []skill.Skill  // /skills 列表与 /技能名 调用
+	mcp         *mcp.Manager   // /mcp 状态，可为 nil
+	agentDefs   []subagent.Def // /agents 列表
+	workspace   string         // 工作空间隔离根；空=未开启
 	switchModel func(name string) (model, baseURL string, err error)
 	version     string
 
@@ -96,6 +102,8 @@ type model struct {
 	rendered      []string    // 各项在当前宽度下的渲染缓存（每条只渲染一次，避免卡）
 	toolsExpanded bool        // 是否展开历史工具执行（默认折叠，只留最近 2 个）
 	streamBuf     string      // 流式生成中的未完成正文（完成后清空、由最终渲染替换）
+	shellCtx      []string    // ! 命令的待注入上下文块，随下一条用户消息发出
+	workingOn     string      // 正在执行的工具标签（含子代理前缀）；空=没有工具在跑
 }
 
 // visibleToolExecs 是折叠时仍完整显示的最近工具执行数。
@@ -163,15 +171,30 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case toolCallMsg:
-		m.emit(transItem{kind: tToolCall, name: msg.name, input: msg.input})
+		m.workingOn = agentTag(msg.agent) + msg.name
+		m.emit(transItem{kind: tToolCall, name: msg.name, agent: msg.agent, input: msg.input})
 		return m, nil
 
 	case toolResultMsg:
-		m.emit(transItem{kind: tToolResult, name: msg.name, result: msg.result, isErr: msg.isErr})
+		m.workingOn = ""
+		m.emit(transItem{kind: tToolResult, name: msg.name, agent: msg.agent, result: msg.result, isErr: msg.isErr})
+		return m, nil
+
+	case noteMsg:
+		m.emit(transItem{kind: tNote, text: msg.text})
+		return m, nil
+
+	case shellDoneMsg:
+		m.emit(transItem{kind: tShell, name: msg.cmd, text: msg.out,
+			result: fmt.Sprint(msg.exit), isErr: msg.exit != 0})
+		m.shellCtx = append(m.shellCtx, shellCtxBlock(msg.cmd, msg.out, msg.exit))
 		return m, nil
 
 	case thinkingMsg:
 		m.thinking = msg.active
+		if msg.active {
+			m.workingOn = "" // 回到等模型阶段（被拒的调用没有 result，这里兜底清掉）
+		}
 		return m, nil
 
 	case runStartedMsg:
@@ -186,6 +209,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case confirmReqMsg:
+		// 并行子代理可能同时要确认：第一个占住确认框，其余排队。
+		if m.pending != nil {
+			m.pendingQ = append(m.pendingQ, msg)
+			return m, nil
+		}
 		c := msg
 		m.pending = &c
 		m.state = stateConfirming
@@ -201,6 +229,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.cancel = nil
 		m.thinking = false
+		m.workingOn = ""
 		m.streamBuf = "" // 中断/出错时丢掉未完成的流式尾巴
 		m.state = stateIdle
 		m.ta.Focus()
@@ -255,6 +284,13 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.pending != nil {
 			m.pending.reply <- choice
 			m.pending = nil
+		}
+		// 队列里还有等着的确认（并行子代理）就接着问，否则回到运行态。
+		if len(m.pendingQ) > 0 {
+			c := m.pendingQ[0]
+			m.pendingQ = m.pendingQ[1:]
+			m.pending = &c
+			return m, nil
 		}
 		m.state = stateRunning
 		return m, nil
@@ -384,6 +420,20 @@ func (m model) submitInput() (tea.Model, tea.Cmd) {
 	if strings.HasPrefix(text, "/") {
 		return m.runCommand(text)
 	}
+	// ! shell 直通；!! 转义为普通消息（剥一个 !），与 // 同一惯例。
+	if strings.HasPrefix(text, "!") && !strings.HasPrefix(text, "!!") {
+		cmd := strings.TrimSpace(text[1:])
+		m.ta.Reset()
+		if cmd == "" {
+			m.emit(transItem{kind: tNote, text: "用法：! <shell 命令>（输出会随下一条消息进入模型上下文）"})
+			return m, nil
+		}
+		m.emit(transItem{kind: tUser, text: text})
+		return m, runShell(cmd) // 异步执行，不锁输入
+	}
+	if strings.HasPrefix(text, "!!") {
+		text = text[1:]
+	}
 	m.ta.Reset()
 	m.state = stateRunning
 	m.ta.Blur()
@@ -391,7 +441,7 @@ func (m model) submitInput() (tea.Model, tea.Cmd) {
 	if m.idle != nil {
 		m.idle.Touch()
 	}
-	return m, m.sendCmd(text)
+	return m, m.sendCmd(m.takeShellCtx(text))
 }
 
 func (m model) setMode(name string) (tea.Model, tea.Cmd) {
@@ -399,6 +449,8 @@ func (m model) setMode(name string) (tea.Model, tea.Cmd) {
 	switch name {
 	case "plan":
 		mode = modePlan
+	case "auto":
+		mode = modeAuto
 	case "yolo":
 		mode = modeYolo
 	default:
@@ -543,19 +595,44 @@ func (m model) renderItem(it transItem) string {
 	case tAssistant:
 		return renderMarkdown(it.text, m.contentWidth())
 	case tToolCall:
-		return toolCallStyle.Render("  → "+it.name) + " " +
+		return toolCallStyle.Render("  → "+agentTag(it.agent)+it.name) + " " +
 			toolArgStyle.Render(oneLine(compactJSON(it.input), m.previewWidth()))
 	case tToolResult:
 		mark, st := "✓", okStyle
 		if it.isErr {
 			mark, st = "✗", errStyle
 		}
-		return "  " + st.Render(mark) + " " + toolArgStyle.Render(oneLine(it.result, m.previewWidth()))
+		return "  " + st.Render(mark) + " " +
+			toolArgStyle.Render(agentTag(it.agent)+oneLine(it.result, m.previewWidth()))
 	case tErr:
 		return errStyle.Render("error: " + it.text)
+	case tShell:
+		return m.renderShell(it)
 	default: // tNote
 		return noteStyle.Render(it.text)
 	}
+}
+
+// renderShell 渲染一条 ! 命令的输出：缩进正文（超长折叠），非零退出标红。
+func (m model) renderShell(it transItem) string {
+	out := strings.TrimRight(it.text, "\n")
+	var b []string
+	if out != "" {
+		lines := strings.Split(out, "\n")
+		if len(lines) > shellShowMax {
+			hidden := len(lines) - shellShowMax
+			lines = append(lines[:shellShowMax], fmt.Sprintf("…（还有 %d 行，已进上下文）", hidden))
+		}
+		for _, l := range lines {
+			b = append(b, "  "+valueStyle.Render(l))
+		}
+	}
+	if it.isErr {
+		b = append(b, "  "+errStyle.Render("✗ exit "+it.result))
+	} else if out == "" {
+		b = append(b, "  "+noteStyle.Render("（无输出）"))
+	}
+	return strings.Join(b, "\n")
 }
 
 func (m model) View() string {
@@ -568,15 +645,19 @@ func (m model) View() string {
 // footerView 是底部固定区，正好 footerReserve 行。确认时换成醒目的批准框，
 // 否则是「状态/spinner 行 + 输入框 + 状态栏」。
 func (m model) footerView() string {
-	status := modeBadge(m.perms.current()) + " " + hintStyle.Render(m.statusLine())
+	status := modeBadge(m.perms.current())
+	if m.workspace != "" {
+		status += " " + planBadge.Render("ws")
+	}
+	status += " " + hintStyle.Render(m.statusLine())
 
 	var footer string
 	if m.state == stateConfirming && m.pending != nil {
 		footer = lipgloss.JoinVertical(lipgloss.Left, m.confirmBox(), status)
 	} else {
 		var top string
-		if m.thinking {
-			top = m.sp.View() + " " + statusStyle.Render("thinking…")
+		if label := m.statusIndicator(); label != "" {
+			top = m.sp.View() + " " + statusStyle.Render(label)
 		}
 		box := borderFocused
 		if m.state != stateIdle {
@@ -591,7 +672,9 @@ func (m model) footerView() string {
 	return lipgloss.NewStyle().MaxWidth(m.width).Render(footer)
 }
 
-// menuView 渲染 / 补全菜单（最多 6 行，选中行反色；选中项超窗时滚动跟随）。
+// menuView 渲染 / 补全菜单（最多 6 行，选中项超窗时滚动跟随）。
+// 命令名蓝、参数提示与摘要灰阶分层；选中行 accent 指示符 + 浅色底铺满整行。
+// 列宽按可见项里最宽的左列算，显示格宽计数（CJK 占 2 格）。
 func (m model) menuView() string {
 	if len(m.menuItems) == 0 {
 		return ""
@@ -604,40 +687,91 @@ func (m model) menuView() string {
 	if end > len(m.menuItems) {
 		end = len(m.menuItems)
 	}
+
+	labelW := 0
+	for i := start; i < end; i++ {
+		c := m.menuItems[i]
+		if w := lipgloss.Width("/" + c.name + argHintSuffix(c)); w > labelW {
+			labelW = w
+		}
+	}
+
 	lines := make([]string, 0, end-start)
 	for i := start; i < end; i++ {
 		c := m.menuItems[i]
-		label := "/" + c.name
-		if c.argHint != "" {
-			label += " " + c.argHint
-		}
-		badge := ""
+		name, hint := "/"+c.name, argHintSuffix(c)
+		gap := strings.Repeat(" ", labelW-lipgloss.Width(name+hint)+2)
+		summary := c.summary
 		if c.source != "" {
-			badge = " [" + c.source + "]"
+			summary += " · 技能"
 		}
-		line := fmt.Sprintf("  %-26s %s%s", label, c.summary, badge)
+		var line string
 		if i == m.menuSel {
-			line = menuSelStyle.Render(line)
+			line = menuCursorStyle.Render(" ❯ ") + menuNameSelStyle.Render(name) +
+				menuHintSelStyle.Render(hint) + menuSelFill.Render(gap) + menuSumSelStyle.Render(summary)
+			if pad := m.width - lipgloss.Width(line); pad > 0 {
+				line += menuSelFill.Render(strings.Repeat(" ", pad))
+			}
 		} else {
-			line = hintStyle.Render(line)
+			line = "   " + menuNameStyle.Render(name) + menuHintStyle.Render(hint) +
+				gap + menuSumStyle.Render(summary)
 		}
 		lines = append(lines, line)
 	}
 	return strings.Join(lines, "\n")
 }
 
-// menuSelStyle 是补全菜单选中行的样式。
-var menuSelStyle = lipgloss.NewStyle().Reverse(true)
+// argHintSuffix 是命令左列里参数提示的部分（带前导空格，无参数则为空）。
+func argHintSuffix(c command) string {
+	if c.argHint == "" {
+		return ""
+	}
+	return " " + c.argHint
+}
+
+// padCell 把 s 右补空格到 w 显示格宽。fmt 的 %-Ns 按字节数补齐，
+// 中文（2 格宽、3 字节）一掺进来列就歪，这里按终端实际格宽算。
+func padCell(s string, w int) string {
+	if d := w - lipgloss.Width(s); d > 0 {
+		return s + strings.Repeat(" ", d)
+	}
+	return s
+}
+
+// agentTag 是工具行的子代理标签前缀（空标签返回空串）。
+func agentTag(label string) string {
+	if label == "" {
+		return ""
+	}
+	return "[" + label + "] "
+}
 
 // confirmBox 是醒目的工具批准框（4 行：边框 + 2 内容行），替代输入框位置。
 func (m model) confirmBox() string {
 	innerW := max(20, m.width-6)
-	args := oneLine(compactJSON(m.pending.input), max(8, innerW-len(m.pending.name)-12))
+	name := agentTag(m.pending.agent) + m.pending.name
+	args := oneLine(compactJSON(m.pending.input), max(8, innerW-len(name)-12))
 	line1 := confirmBadge.Render(" 需要批准 ") + " " +
-		toolCallStyle.Bold(true).Render(m.pending.name) + " " + toolArgStyle.Render(args)
+		toolCallStyle.Bold(true).Render(name) + " " + toolArgStyle.Render(args)
 	line2 := keyYes.Render("[y] 执行") + "   " + keyNo.Render("[n] 拒绝") + "   " +
 		keyAll.Render("[a] 本会话一直允许")
 	return confirmBoxStyle.Width(innerW).Render(line1 + "\n" + line2)
+}
+
+// statusIndicator 返回 turn 进行中的阶段指示：等模型是 thinking，
+// 执行工具是 working（带当前工具名，含子代理标签）。空串=无事发生。
+// 后台 turn（心跳/梦）只在等模型时给指示，与原行为一致。
+func (m model) statusIndicator() string {
+	switch {
+	case m.thinking:
+		return "thinking…"
+	case m.state != stateRunning:
+		return ""
+	case m.workingOn != "":
+		return "working · " + m.workingOn + "…"
+	default:
+		return "working…"
+	}
 }
 
 func (m model) statusLine() string {

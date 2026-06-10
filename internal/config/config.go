@@ -47,7 +47,8 @@ type Config struct {
 	Providers    map[string]Provider         `json:"providers"`
 	Models       map[string]string           `json:"models"` // 别名 → "provider/model-id"
 	DefaultModel string                      `json:"default_model"`
-	MCP          map[string]mcp.ServerConfig `json:"mcp"` // MCP server 名 → stdio 配置
+	AutoModel    string                      `json:"auto_model"` // auto 模式权限裁决用的小模型（别名或 provider/model-id）；空=用主模型
+	MCP          map[string]mcp.ServerConfig `json:"mcp"`        // MCP server 名 → stdio 配置
 }
 
 // Target 是 -model 解析后的落点：构造 llm 客户端所需的全部信息。
