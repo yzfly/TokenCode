@@ -43,15 +43,16 @@ func (writeTool) Execute(ctx context.Context, input json.RawMessage) (string, er
 	if a.Path == "" {
 		return "", fmt.Errorf("path is required")
 	}
-	if err := guardPath(a.Path); err != nil {
+	path, err := resolvePath(ctx, a.Path)
+	if err != nil {
 		return "", err
 	}
-	if dir := filepath.Dir(a.Path); dir != "" && dir != "." {
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return "", err
 		}
 	}
-	if err := os.WriteFile(a.Path, []byte(a.Content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(a.Content), 0o644); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("wrote %d bytes to %s", len(a.Content), a.Path), nil

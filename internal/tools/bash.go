@@ -52,7 +52,9 @@ func (b bashTool) Execute(ctx context.Context, input json.RawMessage) (string, e
 	cctx, cancel := context.WithTimeout(ctx, to)
 	defer cancel()
 
-	out, err := exec.CommandContext(cctx, "sh", "-c", a.Command).CombinedOutput()
+	cmd := exec.CommandContext(cctx, "sh", "-c", a.Command)
+	cmd.Dir = rootFrom(cctx) // 空=继承进程 cwd
+	out, err := cmd.CombinedOutput()
 	res := string(out)
 
 	if cctx.Err() == context.DeadlineExceeded {

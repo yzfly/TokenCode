@@ -31,6 +31,7 @@ type Registry struct {
 	mu    sync.RWMutex
 	tools map[string]Tool
 	order []string
+	root  string // per-agent 工具根；空=不限制（主 agent）
 }
 
 // NewRegistry 用给定工具建一个注册表。
@@ -71,11 +72,22 @@ func (r *Registry) List() []Tool {
 	return out
 }
 
-// Execute 找到并执行工具；找不到返回错误。
+// SetRoot 绑定 per-agent 工具根：文件工具的相对路径基于它解析且只允许
+// 访问它之内，bash 在它之下执行。在注册表投入使用前设置一次。
+func (r *Registry) SetRoot(root string) { r.root = root }
+
+// Root 返回注册表绑定的工具根（空=不限制）。
+func (r *Registry) Root() string { return r.root }
+
+// Execute 找到并执行工具；找不到返回错误。注册表绑定了根时注入 ctx，
+// 文件/bash 工具据此解析与守卫路径。
 func (r *Registry) Execute(ctx context.Context, name string, input json.RawMessage) (string, error) {
 	t, ok := r.Get(name)
 	if !ok {
 		return "", fmt.Errorf("unknown tool: %s", name)
+	}
+	if r.root != "" {
+		ctx = WithRoot(ctx, r.root)
 	}
 	return t.Execute(ctx, input)
 }

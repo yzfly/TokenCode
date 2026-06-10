@@ -50,10 +50,11 @@ func (editTool) Execute(ctx context.Context, input json.RawMessage) (string, err
 	if a.OldString == a.NewString {
 		return "", fmt.Errorf("old_string and new_string are identical")
 	}
-	if err := guardPath(a.Path); err != nil {
+	path, err := resolvePath(ctx, a.Path)
+	if err != nil {
 		return "", err
 	}
-	data, err := os.ReadFile(a.Path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
 	}
@@ -72,7 +73,7 @@ func (editTool) Execute(ctx context.Context, input json.RawMessage) (string, err
 		repl = n
 		out = strings.ReplaceAll(content, a.OldString, a.NewString)
 	}
-	if err := os.WriteFile(a.Path, []byte(out), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(out), 0o644); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("edited %s (%d replacement(s))", a.Path, repl), nil

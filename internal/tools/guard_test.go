@@ -92,6 +92,58 @@ func TestWorkspaceGuardSymlinkEscape(t *testing.T) {
 	}
 }
 
+func TestRegistryRoot(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "in.txt"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "out.txt"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reg := NewRegistry(Read(), Write(), Edit(), Bash())
+	reg.SetRoot(root)
+	ctx := context.Background()
+
+	// 相对路径基于根解析。
+	if _, err := reg.Execute(ctx, "read", mustJSON(t, map[string]any{"path": "in.txt"})); err != nil {
+		t.Errorf("read relative inside root: %v", err)
+	}
+	if _, err := reg.Execute(ctx, "write", mustJSON(t, map[string]any{"path": "sub/new.txt", "content": "y"})); err != nil {
+		t.Errorf("write relative inside root: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "sub", "new.txt")); err != nil {
+		t.Errorf("relative write should land under root: %v", err)
+	}
+
+	// 根之外的绝对路径与 ../ 逃逸一律拒绝。
+	if _, err := reg.Execute(ctx, "read", mustJSON(t, map[string]any{"path": filepath.Join(outside, "out.txt")})); err == nil {
+		t.Error("absolute path outside root should be rejected")
+	}
+	if _, err := reg.Execute(ctx, "write", mustJSON(t, map[string]any{"path": "../escape.txt", "content": "y"})); err == nil {
+		t.Error("dot-dot escape from root should be rejected")
+	}
+
+	// bash 在根目录下执行。
+	out, err := reg.Execute(ctx, "bash", mustJSON(t, map[string]any{"command": "pwd"}))
+	if err != nil {
+		t.Fatalf("bash under root: %v", err)
+	}
+	want := root
+	if r, err := filepath.EvalSymlinks(root); err == nil {
+		want = r
+	}
+	if !strings.Contains(out, want) {
+		t.Errorf("bash cwd = %q, want under %q", out, want)
+	}
+
+	// 未绑定根的注册表行为不变（绝对路径自由访问）。
+	free := NewRegistry(Read())
+	if _, err := free.Execute(ctx, "read", mustJSON(t, map[string]any{"path": filepath.Join(outside, "out.txt")})); err != nil {
+		t.Errorf("rootless registry should allow absolute path: %v", err)
+	}
+}
+
 func TestWorkspaceGuardDisabled(t *testing.T) {
 	withWorkspace(t, t.TempDir())
 	workspaceRoot = "" // 显式关闭
