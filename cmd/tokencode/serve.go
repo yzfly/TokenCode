@@ -42,7 +42,7 @@ func cmdServe(args []string) int {
 	// 默认模型优先级与主命令一致：flag > env > config > 内置默认。
 	def := *model
 	if def == "" {
-		def = os.Getenv("ANTHROPIC_MODEL")
+		def = config.EnvModel()
 	}
 	if def == "" {
 		def = cfg.DefaultModel

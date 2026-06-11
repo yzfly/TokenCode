@@ -185,7 +185,7 @@ func resolveClient(name string) (LLM, string, error) {
 		return nil, "", err
 	}
 	if name == "" {
-		name = os.Getenv("ANTHROPIC_MODEL")
+		name = config.EnvModel()
 	}
 	if name == "" {
 		name = cfg.DefaultModel
@@ -208,17 +208,14 @@ func resolveClient(name string) (LLM, string, error) {
 // （cmd 包不可被 import，此处是门面自己的极薄复刻）。
 func buildClient(tgt config.Target) (LLM, error) {
 	if tgt.Default {
-		burl := os.Getenv("ANTHROPIC_BASE_URL")
+		burl := config.EnvBaseURL()
 		if burl == "" {
 			burl = llm.DefaultBaseURL
 		}
-		if t := os.Getenv("ANTHROPIC_AUTH_TOKEN"); t != "" {
-			return llm.NewAnthropic(t, burl, true), nil
+		if key, bearer, ok := config.EnvAuth(); ok {
+			return llm.NewAnthropic(key, burl, bearer), nil
 		}
-		if k := os.Getenv("ANTHROPIC_API_KEY"); k != "" {
-			return llm.NewAnthropic(k, burl, false), nil
-		}
-		return nil, errors.New("tokencode: 缺少凭据——设置 ANTHROPIC_AUTH_TOKEN 或 ANTHROPIC_API_KEY，" +
+		return nil, errors.New("tokencode: 缺少凭据——设置 TOKENCODE_AUTH_TOKEN（或 ANTHROPIC_AUTH_TOKEN / *_API_KEY），" +
 			"或用 WithModel 指定内置目录里的 provider（运行 `tokencode auth login <provider>` 存 key），" +
 			"或用 WithLLM 直接注入客户端")
 	}

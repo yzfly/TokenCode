@@ -65,10 +65,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 模型名优先级：flag > env > config > 内置默认。
+	// 模型名优先级：flag > env（TOKENCODE_MODEL > ANTHROPIC_MODEL）> config > 内置默认。
 	modelName := *model
 	if modelName == "" {
-		modelName = os.Getenv("ANTHROPIC_MODEL")
+		modelName = config.EnvModel()
 	}
 	if modelName == "" {
 		modelName = cfg.DefaultModel
@@ -452,12 +452,15 @@ func pulseLogf() func(string, ...any) {
 }
 
 // buildClient 按解析落点构造客户端，返回实际生效的 base URL（供 TUI 展示）。
-// 落点为 Default 时走 ANTHROPIC_* env 兜底，与无 config 时代行为一致。
+// 落点为 Default 时走环境变量兜底（TOKENCODE_* 优先、ANTHROPIC_* 兼容），
+// 与无 config 时代行为一致。
 func buildClient(tgt config.Target, baseURLFlag string) (llm.LLM, string, error) {
 	if tgt.Default {
 		burl := baseURLFlag
 		if burl == "" {
-			burl = envOr("ANTHROPIC_BASE_URL", llm.DefaultBaseURL)
+			if burl = config.EnvBaseURL(); burl == "" {
+				burl = llm.DefaultBaseURL
+			}
 		}
 		key, bearer, err := resolveAuth()
 		if err != nil {
@@ -491,15 +494,13 @@ func buildClient(tgt config.Target, baseURLFlag string) (llm.LLM, string, error)
 	}
 }
 
-// resolveAuth 优先用 ANTHROPIC_AUTH_TOKEN（Bearer），否则 ANTHROPIC_API_KEY（x-api-key）。
+// resolveAuth 取默认 provider 的环境变量凭据：TOKENCODE_* 优先、ANTHROPIC_* 兼容，
+// auth token（Bearer）压过 api key（x-api-key）。
 func resolveAuth() (key string, bearer bool, err error) {
-	if t := os.Getenv("ANTHROPIC_AUTH_TOKEN"); t != "" {
-		return t, true, nil
+	if k, b, ok := config.EnvAuth(); ok {
+		return k, b, nil
 	}
-	if k := os.Getenv("ANTHROPIC_API_KEY"); k != "" {
-		return k, false, nil
-	}
-	return "", false, fmt.Errorf("set ANTHROPIC_AUTH_TOKEN (DeepSeek key) or ANTHROPIC_API_KEY")
+	return "", false, fmt.Errorf("set TOKENCODE_AUTH_TOKEN / ANTHROPIC_AUTH_TOKEN (Bearer) or TOKENCODE_API_KEY / ANTHROPIC_API_KEY")
 }
 
 func envOr(key, def string) string {
