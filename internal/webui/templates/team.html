@@ -1,0 +1,90 @@
+{{define "team"}}<!doctype html>
+<html lang="zh">
+<head><title>团队 · tokencode</title>{{template "head"}}</head>
+<body>
+{{template "nav" .}}
+<main>
+  <h1>团队管理</h1>
+  {{if .Err}}<p class="empty">读取 team.json 失败：{{.Err}}</p>{{end}}
+
+  <h2>生成配对码（成员在 IM 里发码即绑定；1 小时 / 单次有效）</h2>
+  <form class="row" id="pair">
+    <div class="f" style="flex:2">
+      <label>workspace（成员工作空间根，绝对路径，须已存在）</label>
+      <input id="p-ws" placeholder="/home/me/work/proj-a" required>
+    </div>
+    <div class="f"><label>name（备注，可选）</label><input id="p-name"></div>
+    <div class="f"><label>tools（逗号分隔，空=默认只读集）</label><input id="p-tools" placeholder="read,bash,write"></div>
+    <div><button type="submit">生成配对码</button></div>
+  </form>
+  <p class="pairout" id="p-out"></p>
+
+  <h2>已绑定成员（{{len .Bindings}}）</h2>
+  {{if .Bindings}}
+  <table><thead><tr>
+    <th>通道</th><th>用户</th><th>备注</th><th>工作空间</th><th>工具白名单</th><th>配对时间</th><th></th>
+  </tr></thead><tbody>
+  {{range .Bindings}}
+    <tr>
+      <td>{{.Channel}}</td><td>{{.UserID}}</td><td>{{.Name}}</td>
+      <td><code>{{.Workspace}}</code></td>
+      <td>{{if .Yolo}}全部（yolo）{{else if .AllowedTools}}{{range $i, $t := .AllowedTools}}{{if $i}}, {{end}}{{$t}}{{end}}{{else}}默认只读集{{end}}</td>
+      <td>{{.PairedAt.Format "2006-01-02 15:04"}}</td>
+      <td><button class="danger unbind" data-channel="{{.Channel}}" data-user="{{.UserID}}">解绑</button></td>
+    </tr>
+  {{end}}
+  </tbody></table>
+  {{else}}<p class="empty">尚无绑定。</p>{{end}}
+
+  <h2>待认领配对码（{{len .Pending}}）</h2>
+  {{if .Pending}}
+  <table><thead><tr>
+    <th>配对码</th><th>备注</th><th>工作空间</th><th>工具白名单</th><th>过期时间</th>
+  </tr></thead><tbody>
+  {{range .Pending}}
+    <tr>
+      <td><code>{{.Code}}</code></td><td>{{.Name}}</td>
+      <td><code>{{.Workspace}}</code></td>
+      <td>{{if .Yolo}}全部（yolo）{{else if .AllowedTools}}{{range $i, $t := .AllowedTools}}{{if $i}}, {{end}}{{$t}}{{end}}{{else}}默认只读集{{end}}</td>
+      <td>{{.ExpiresAt.Format "15:04:05"}}</td>
+    </tr>
+  {{end}}
+  </tbody></table>
+  {{else}}<p class="empty">无待认领配对码。</p>{{end}}
+</main>
+<script>
+(function () {
+  const out = document.getElementById('p-out');
+  document.getElementById('pair').addEventListener('submit', async e => {
+    e.preventDefault();
+    const body = {
+      workspace: document.getElementById('p-ws').value.trim(),
+      name: document.getElementById('p-name').value.trim(),
+      tools: document.getElementById('p-tools').value.trim()
+    };
+    const r = await fetch('/api/team/pair', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { out.textContent = '生成失败：' + (j.error || r.status); return; }
+    out.innerHTML = '';
+    out.append('配对码：');
+    const c = document.createElement('code'); c.textContent = j.code; out.append(c);
+    out.append('（1 小时内单次有效，刷新见下表）');
+    setTimeout(() => location.reload(), 1500);
+  });
+  for (const btn of document.querySelectorAll('.unbind')) {
+    btn.addEventListener('click', async () => {
+      if (!confirm('解除 ' + btn.dataset.channel + ' / ' + btn.dataset.user + ' 的绑定？')) return;
+      const r = await fetch('/api/team/binding?channel=' + encodeURIComponent(btn.dataset.channel)
+        + '&user_id=' + encodeURIComponent(btn.dataset.user), { method: 'DELETE' });
+      if (r.ok) location.reload();
+      else alert('解绑失败：' + ((await r.json().catch(() => ({}))).error || r.status));
+    });
+  }
+})();
+</script>
+</body>
+</html>
+{{end}}

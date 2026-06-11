@@ -1,0 +1,110 @@
+{{define "index"}}<!doctype html>
+<html lang="zh">
+<head><title>用量大盘 · tokencode</title>{{template "head"}}</head>
+<body>
+{{template "nav" .}}
+<main>
+  <h1>Token 用量大盘</h1>
+
+  <div class="cards">
+    <div class="card"><div class="label">本月 in / out</div><div class="num" id="m-io">–</div>
+      <div class="sub" id="m-cache">cache –</div></div>
+    <div class="card"><div class="label">本月调用次数</div><div class="num" id="m-calls">–</div>
+      <div class="sub" id="m-range">–</div></div>
+    <div class="card"><div class="label">今天 in / out</div><div class="num" id="d-io">–</div>
+      <div class="sub" id="d-cache">cache –</div></div>
+    <div class="card"><div class="label">今天调用次数</div><div class="num" id="d-calls">–</div>
+      <div class="sub" id="d-date">–</div></div>
+  </div>
+
+  <h2>近 30 天（in+out，按天）</h2>
+  <div class="chart" id="chart"></div>
+
+  <h2>本月 · 按模型 Top 10</h2>
+  <table id="t-model"><thead><tr>
+    <th>模型</th><th class="r">in</th><th class="r">out</th><th class="r">cache r/w</th><th class="r">调用</th>
+  </tr></thead><tbody></tbody></table>
+
+  <h2>本月 · 按来源 Top 10</h2>
+  <table id="t-source"><thead><tr>
+    <th>来源</th><th class="r">in</th><th class="r">out</th><th class="r">cache r/w</th><th class="r">调用</th>
+  </tr></thead><tbody></tbody></table>
+</main>
+<script>
+(async function () {
+  const fmt = n => (n || 0).toLocaleString('en-US');
+  const ds = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0')
+                + '-' + String(d.getDate()).padStart(2, '0');
+  const now = new Date();
+  const todayStr  = ds(now);
+  const monthFrom = ds(new Date(now.getFullYear(), now.getMonth(), 1));
+  const d30From   = ds(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 29));
+
+  async function getUsage(from, to) {
+    const r = await fetch('/api/usage?from=' + from + '&to=' + to);
+    if (!r.ok) throw new Error('GET /api/usage ' + r.status);
+    return r.json();
+  }
+  // 两次取数：本月（卡片 + Top 表）、近 30 天（条形图 + 今天）。
+  const [month, last30] = await Promise.all([
+    getUsage(monthFrom, todayStr), getUsage(d30From, todayStr)
+  ]);
+
+  const Z = { in: 0, out: 0, cache_read: 0, cache_write: 0, calls: 0 };
+  const mt = month.total || Z;
+  const dt = (last30.by_day || {})[todayStr] || Z;
+  const set = (id, v) => document.getElementById(id).textContent = v;
+  set('m-io', fmt(mt.in) + ' / ' + fmt(mt.out));
+  set('m-cache', 'cache 读 ' + fmt(mt.cache_read) + ' · 写 ' + fmt(mt.cache_write));
+  set('m-calls', fmt(mt.calls));
+  set('m-range', month.from + ' → ' + month.to);
+  set('d-io', fmt(dt.in) + ' / ' + fmt(dt.out));
+  set('d-cache', 'cache 读 ' + fmt(dt.cache_read) + ' · 写 ' + fmt(dt.cache_write));
+  set('d-calls', fmt(dt.calls));
+  set('d-date', todayStr);
+
+  // 条形图：逐天补零，高度按 (in+out)/max 归一。
+  const days = [];
+  for (let i = 29; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
+    const b = (last30.by_day || {})[ds(d)] || Z;
+    days.push({ day: ds(d), v: (b.in || 0) + (b.out || 0), b });
+  }
+  const max = Math.max(1, ...days.map(x => x.v));
+  const chart = document.getElementById('chart');
+  for (const x of days) {
+    const bar = document.createElement('div');
+    bar.className = 'bar' + (x.v ? '' : ' zero');
+    bar.style.height = Math.max(1, Math.round(x.v / max * 100)) + '%';
+    bar.title = x.day + ' · in ' + fmt(x.b.in) + ' · out ' + fmt(x.b.out) + ' · 调用 ' + fmt(x.b.calls);
+    chart.appendChild(bar);
+  }
+
+  function fillTop(tableID, byKey) {
+    const rows = Object.entries(byKey || {})
+      .sort((a, b) => (b[1].in + b[1].out) - (a[1].in + a[1].out)).slice(0, 10);
+    const tb = document.querySelector('#' + tableID + ' tbody');
+    if (!rows.length) {
+      tb.innerHTML = '<tr><td colspan="5" class="empty">暂无数据</td></tr>';
+      return;
+    }
+    for (const [key, b] of rows) {
+      const tr = document.createElement('tr');
+      const cells = [key, fmt(b.in), fmt(b.out), fmt(b.cache_read) + ' / ' + fmt(b.cache_write), fmt(b.calls)];
+      cells.forEach((c, i) => {
+        const td = document.createElement('td');
+        if (i > 0) td.className = 'r';
+        td.textContent = c;
+        tr.appendChild(td);
+      });
+      tb.appendChild(tr);
+    }
+  }
+  fillTop('t-model', month.by_model);
+  fillTop('t-source', month.by_source);
+})().catch(e => { document.querySelector('main').insertAdjacentHTML('beforeend',
+  '<p class="empty">取数失败：' + e.message + '</p>'); });
+</script>
+</body>
+</html>
+{{end}}

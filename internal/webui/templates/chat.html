@@ -1,0 +1,116 @@
+{{define "chat"}}<!doctype html>
+<html lang="zh">
+<head><title>聊天 · tokencode</title>{{template "head"}}</head>
+<body>
+{{template "nav" .}}
+<main>
+  <h1>聊天（单 turn，无共享历史）</h1>
+  <div id="log"><p class="empty">每次发送都是一个独立的 /v1/run（与 headless -p 语义相同）。</p></div>
+  <form class="row" id="f" style="margin-top:12px">
+    <div class="f" style="flex:4">
+      <label>prompt</label>
+      <textarea id="prompt" rows="3" placeholder="要做什么？Ctrl/⌘+Enter 发送" required></textarea>
+    </div>
+    <div class="f" style="flex:1">
+      <label>model（可选，空=服务默认）</label>
+      <input id="model" placeholder="如 kimi-for-coding/k2p6">
+    </div>
+    <div><button id="send" type="submit">发送</button></div>
+  </form>
+</main>
+<script>
+(function () {
+  const log = document.getElementById('log'), form = document.getElementById('f');
+  const promptEl = document.getElementById('prompt'), modelEl = document.getElementById('model');
+  const sendBtn = document.getElementById('send');
+
+  function addMsg(cls, text) {
+    const p = document.createElement('p');
+    p.className = 'msg ' + cls;
+    p.textContent = text;
+    log.appendChild(p);
+    log.scrollTop = log.scrollHeight;
+    return p;
+  }
+  // tool_call/tool_result 折叠进 details：默认收起，点开看入参与结果状态。
+  function addTool(name, input) {
+    const d = document.createElement('details');
+    const s = document.createElement('summary');
+    s.textContent = '🔧 ' + name;
+    d.appendChild(s);
+    const pre = document.createElement('pre');
+    pre.textContent = input;
+    d.appendChild(pre);
+    log.appendChild(d);
+    return d;
+  }
+
+  async function run(prompt, model) {
+    const res = await fetch('/v1/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
+      body: JSON.stringify(model ? { prompt, model } : { prompt })
+    });
+    if (!res.ok) {
+      let msg = 'HTTP ' + res.status;
+      try { msg = (await res.json()).error || msg; } catch (_) {}
+      addMsg('err', '出错：' + msg);
+      return;
+    }
+    // 手撸 SSE 解析（fetch 流式读 body，按空行切事件）——EventSource 不支持 POST。
+    const reader = res.body.getReader(), dec = new TextDecoder();
+    let buf = '', cur = null, lastTool = null;
+    const handle = ev => {
+      if (ev.type === 'assistant_delta') {
+        if (!cur) cur = addMsg('', '');
+        cur.textContent += ev.text || '';
+      } else if (ev.type === 'tool_call') {
+        cur = null;
+        lastTool = addTool(ev.name, JSON.stringify(ev.input, null, 2));
+      } else if (ev.type === 'tool_result') {
+        if (lastTool) {
+          lastTool.querySelector('summary').textContent += ev.is_error ? ' → ✗ 出错' : ' → ✓ 完成';
+          lastTool = null;
+        }
+      } else if (ev.type === 'result') {
+        cur = null;
+        if (ev.is_error) addMsg('err', '出错：' + (ev.result || '未知错误'));
+        addMsg('fin', '完成 · 工具调用 ' + (ev.tool_calls ?? 0) + ' 次');
+      }
+      log.scrollTop = log.scrollHeight;
+    };
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf('\n\n')) >= 0) {
+        const chunk = buf.slice(0, i); buf = buf.slice(i + 2);
+        for (const line of chunk.split('\n')) {
+          if (line.startsWith('data: ')) {
+            try { handle(JSON.parse(line.slice(6))); } catch (_) {}
+          }
+        }
+      }
+    }
+  }
+
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    const prompt = promptEl.value.trim();
+    if (!prompt) return;
+    addMsg('me', '你：' + prompt);
+    promptEl.value = '';
+    sendBtn.disabled = true;
+    try { await run(prompt, modelEl.value.trim()); }
+    catch (err) { addMsg('err', '出错：' + err.message); }
+    finally { sendBtn.disabled = false; promptEl.focus(); }
+  });
+  promptEl.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') form.requestSubmit();
+  });
+})();
+</script>
+</body>
+</html>
+{{end}}

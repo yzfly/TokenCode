@@ -92,6 +92,21 @@ curl -N -H 'Accept: text/event-stream' http://127.0.0.1:8787/v1/run -d '{"prompt
 
 每个请求独立 agent 实例（无共享历史），`-max-concurrent`（默认 8）限制同时在跑的 run。
 
+#### WebUI（serve 自带）
+
+`tokencode serve` 起来后浏览器开 **http://127.0.0.1:8787/ui** 即是自带管理界面——纯 html/template + 原生 JS，go:embed 进单二进制，零前端框架、零 CDN（内网可用）：
+
+- **/ui · 用量大盘**：本月与今天的 in/out/cache 合计与调用次数、近 30 天按天条形图（纯 CSS）、本月按模型/按来源 Top 10；数据来自 `GET /api/usage?from=&to=`（日期含 to 当天），与 `/usage` 命令同一本账。
+- **/ui/chat · 聊天**：textarea 发 `POST /v1/run` 的 SSE 流式渲染（工具调用折叠显示），可指定 model——单 turn、无共享历史，语义同 headless `-p`。
+- **/ui/team · 团队管理**：绑定列表与待认领配对码；页面上直接生成配对码（`POST /api/team/pair`）与解绑（`DELETE /api/team/binding`），与 `tokencode team` 共用同一份 team.json。
+- **/ui/models · 模型目录**：内置 catalog 全部 provider 与凭据状态（✓ env / ✓ auth.json / —），只读。
+
+安全边界与 serve 相同：**v0 无鉴权，默认仅绑回环，勿绑 0.0.0.0**（页面顶部常驻提示）。`/api/*` 的写操作额外要求回环来源 + 本机 Host（防 DNS rebinding）。
+
+<!-- TODO: WebUI 大盘截图 -->
+
+
+
 ### 团队模式（IM 接入，飞书/钉钉）
 
 团队每个成员用自己的飞书/钉钉账号远程驱动**自己的工作空间**：单聊机器人发消息 → agent 在绑定的目录里跑一个 turn → 回最终结果。长连接接入，**免公网 IP**；文件工具被硬隔离在各自工作空间之内。
