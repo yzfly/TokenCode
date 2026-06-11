@@ -117,10 +117,26 @@ type chatResponse struct {
 		} `json:"message"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
-	Usage struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
-	} `json:"usage"`
+	Usage chatUsage `json:"usage"`
+}
+
+// chatUsage 是 Chat Completions 的用量形态（非流式与流式末 chunk 共用）。
+// 缓存命中走 prompt_tokens_details.cached_tokens（OpenAI/DeepSeek 等支持的端点才有）。
+type chatUsage struct {
+	PromptTokens        int `json:"prompt_tokens"`
+	CompletionTokens    int `json:"completion_tokens"`
+	PromptTokensDetails struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"prompt_tokens_details"`
+}
+
+// toUsage 转成内部 Usage（openai 协议没有缓存写入计数，CacheWrite 恒为零）。
+func (u chatUsage) toUsage() Usage {
+	return Usage{
+		InputTokens:     u.PromptTokens,
+		OutputTokens:    u.CompletionTokens,
+		CacheReadTokens: u.PromptTokensDetails.CachedTokens,
+	}
 }
 
 // ---- IR ↔ 报文转换（纯函数，独立可测）----
@@ -206,7 +222,7 @@ func fromChatResponse(resp chatResponse) (Response, error) {
 		Text:       ch.Message.Content,
 		Thinking:   ch.Message.ReasoningContent,
 		StopReason: normalizeFinishReason(ch.FinishReason),
-		Usage:      Usage{InputTokens: resp.Usage.PromptTokens, OutputTokens: resp.Usage.CompletionTokens},
+		Usage:      resp.Usage.toUsage(),
 	}
 
 	for _, tc := range ch.Message.ToolCalls {
@@ -302,10 +318,7 @@ func (c *OpenAI) CompleteStream(ctx context.Context, req Request, onDelta func(D
 				} `json:"delta"`
 				FinishReason string `json:"finish_reason"`
 			} `json:"choices"`
-			Usage *struct {
-				PromptTokens     int `json:"prompt_tokens"`
-				CompletionTokens int `json:"completion_tokens"`
-			} `json:"usage"`
+			Usage *chatUsage `json:"usage"`
 			Error *struct {
 				Message string `json:"message"`
 			} `json:"error"`
@@ -317,7 +330,7 @@ func (c *OpenAI) CompleteStream(ctx context.Context, req Request, onDelta func(D
 			return fmt.Errorf("llm: %s", ev.Error.Message)
 		}
 		if ev.Usage != nil {
-			out.Usage = Usage{InputTokens: ev.Usage.PromptTokens, OutputTokens: ev.Usage.CompletionTokens}
+			out.Usage = ev.Usage.toUsage()
 		}
 		if len(ev.Choices) == 0 {
 			return nil // 纯 usage chunk

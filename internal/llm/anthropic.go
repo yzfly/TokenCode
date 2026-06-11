@@ -105,8 +105,10 @@ func (c *Anthropic) Complete(ctx context.Context, req Request) (Response, error)
 		} `json:"content"`
 		StopReason string `json:"stop_reason"`
 		Usage      struct {
-			InputTokens  int `json:"input_tokens"`
-			OutputTokens int `json:"output_tokens"`
+			InputTokens         int `json:"input_tokens"`
+			OutputTokens        int `json:"output_tokens"`
+			CacheReadTokens     int `json:"cache_read_input_tokens"`
+			CacheCreationTokens int `json:"cache_creation_input_tokens"`
 		} `json:"usage"`
 		Error *struct {
 			Type    string `json:"type"`
@@ -122,7 +124,12 @@ func (c *Anthropic) Complete(ctx context.Context, req Request) (Response, error)
 
 	out := Response{
 		StopReason: normalizeAnthropicStop(wr.StopReason),
-		Usage:      Usage{InputTokens: wr.Usage.InputTokens, OutputTokens: wr.Usage.OutputTokens},
+		Usage: Usage{
+			InputTokens:      wr.Usage.InputTokens,
+			OutputTokens:     wr.Usage.OutputTokens,
+			CacheReadTokens:  wr.Usage.CacheReadTokens,
+			CacheWriteTokens: wr.Usage.CacheCreationTokens,
+		},
 	}
 	var text strings.Builder
 	for _, blk := range wr.Content {
@@ -240,7 +247,9 @@ func (c *Anthropic) CompleteStream(ctx context.Context, req Request, onDelta fun
 			Index   int    `json:"index"`
 			Message *struct {
 				Usage struct {
-					InputTokens int `json:"input_tokens"`
+					InputTokens         int `json:"input_tokens"`
+					CacheReadTokens     int `json:"cache_read_input_tokens"`
+					CacheCreationTokens int `json:"cache_creation_input_tokens"`
 				} `json:"usage"`
 			} `json:"message"`
 			ContentBlock *struct {
@@ -276,6 +285,8 @@ func (c *Anthropic) CompleteStream(ctx context.Context, req Request, onDelta fun
 		case "message_start":
 			if ev.Message != nil {
 				out.Usage.InputTokens = ev.Message.Usage.InputTokens
+				out.Usage.CacheReadTokens = ev.Message.Usage.CacheReadTokens
+				out.Usage.CacheWriteTokens = ev.Message.Usage.CacheCreationTokens
 			}
 		case "content_block_start":
 			if ev.ContentBlock != nil {

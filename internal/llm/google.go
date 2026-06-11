@@ -120,8 +120,9 @@ type geminiResponse struct {
 		FinishReason string        `json:"finishReason"`
 	} `json:"candidates"`
 	UsageMetadata struct {
-		PromptTokenCount     int `json:"promptTokenCount"`
-		CandidatesTokenCount int `json:"candidatesTokenCount"`
+		PromptTokenCount        int `json:"promptTokenCount"`
+		CandidatesTokenCount    int `json:"candidatesTokenCount"`
+		CachedContentTokenCount int `json:"cachedContentTokenCount"`
 	} `json:"usageMetadata"`
 	Error *struct {
 		Code    int    `json:"code"`
@@ -213,8 +214,9 @@ func fromGeminiResponse(resp geminiResponse) (Response, error) {
 
 	out := Response{
 		Usage: Usage{
-			InputTokens:  resp.UsageMetadata.PromptTokenCount,
-			OutputTokens: resp.UsageMetadata.CandidatesTokenCount,
+			InputTokens:     resp.UsageMetadata.PromptTokenCount,
+			OutputTokens:    resp.UsageMetadata.CandidatesTokenCount,
+			CacheReadTokens: resp.UsageMetadata.CachedContentTokenCount,
 		},
 	}
 	var text, thinking strings.Builder

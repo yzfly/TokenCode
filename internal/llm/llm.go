@@ -66,10 +66,12 @@ const (
 	StopOther     StopReason = "other"
 )
 
-// Usage 是一次请求的 token 用量。
+// Usage 是一次请求的 token 用量。零值表示该 codec/端点未提供对应数据。
 type Usage struct {
-	InputTokens  int
-	OutputTokens int
+	InputTokens      int
+	OutputTokens     int
+	CacheReadTokens  int // 命中提示词缓存读到的 token
+	CacheWriteTokens int // 写入提示词缓存的 token（仅 anthropic 协议提供）
 }
 
 // Response 是模型一次回复。StopReason 为 StopToolUse 时表示模型要继续调工具。

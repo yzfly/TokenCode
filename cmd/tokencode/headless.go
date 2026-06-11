@@ -70,7 +70,8 @@ func splitTools(s string) []string {
 // assembleHeadless 装配一个无界面 agent：模型解析 → 客户端 → 带白名单守卫的
 // 工具注册表（含子代理与 workflow，守卫在工具层、子代理经共享注册表自动继承）
 // → agent。-p 用一次，serve 每请求用一次（stateless）。跳过 TUI/心跳/会话/MCP。
-func assembleHeadless(cfg config.Config, modelName, baseURLFlag string, maxTokens int, allowed []string, yolo bool) (*agent.Agent, string, error) {
+// usageSource 标识装配方（"headless" / "serve"），落进用量记账的 Source。
+func assembleHeadless(cfg config.Config, modelName, baseURLFlag string, maxTokens int, allowed []string, yolo bool, usageSource string) (*agent.Agent, string, error) {
 	tgt, err := cfg.Resolve(modelName)
 	if err != nil {
 		return nil, "", err
@@ -91,6 +92,7 @@ func assembleHeadless(cfg config.Config, modelName, baseURLFlag string, maxToken
 		reg.Add(headless.GateTool(t, allow))
 	}
 	ag := agent.New(client, reg, tgt.Model, maxTokens)
+	ag.SetUsageSource(usageSource)
 
 	runner := subagent.NewRunner(ag.Client, reg, maxTokens, subagent.Discover(cwd))
 	runner.Resolve = func(name string) (llm.LLM, string, error) {
@@ -115,7 +117,7 @@ func runHeadless(cfg config.Config, modelName, baseURL string, maxTokens int, pr
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	ag, model, err := assembleHeadless(cfg, modelName, baseURL, maxTokens, allowed, yolo)
+	ag, model, err := assembleHeadless(cfg, modelName, baseURL, maxTokens, allowed, yolo, "headless")
 	if err != nil {
 		emitHeadlessFailure(output, modelName, err)
 		return 1

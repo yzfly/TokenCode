@@ -81,6 +81,13 @@ func (a *Agent) serveOne(ctx context.Context, ev Event, ui UI) {
 		}
 	}
 
+	// 非用户拍按 Event 来源记账（heartbeat/dream），结束后还原。
+	// turn 串行（单写者不变量），换/还原不会与其它拍交错。
+	if ev.Source == SourceHeartbeat || ev.Source == SourceDream {
+		prev := a.swapUsageSource(string(ev.Source))
+		defer a.swapUsageSource(prev)
+	}
+
 	err := a.runTurn(tctx, ev.Text, turnUI)
 	if ev.Ephemeral {
 		if err != nil {

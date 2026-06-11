@@ -22,10 +22,11 @@
 - **子代理与工作流**：agent 工具委托隔离上下文子代理（并行安全）、workflow 工具跑 goja JS 编排脚本；自定义代理从 `.tokencode/agents`（兼容 `.claude/agents`）发现。
 - **多模型**：内置协议转换层，协议按协议命名——`anthropic` / `openai` / `google` 三种 codec（旧值 `openai-chat` 兼容归一化）；`~/.config/tokencode/config.json` 注册 provider（DeepSeek/Kimi/Qwen/OpenRouter/Ollama/Gemini……），`-model 别名` 或 `-model provider/model-id` 切换；无 config 时默认经 DeepSeek 接入（`deepseek-v4-pro[1m]`），行为与之前一致。
 - **模型目录与 coding plan 开箱即用**：embed 一份 [models.dev](https://models.dev) 裁剪快照（141 个 provider），Kimi for Coding / 智谱 GLM / 阿里百炼 / MiniMax / 腾讯混元等国内 coding plan 零配置可选；`tokencode models` 浏览、`tokencode auth login <provider>` 存 key（auth.json，0600）；解析顺序 config 别名 → config provider → 内置目录 → 直传。
-- **命令体系**：命令注册表驱动的 `/help /model /skills /mcp /plan /review /yolo /exit`；输入 `/` 弹补全菜单（前缀优先、↑↓ 选、Tab 补全、Enter 执行、Esc 关）；未知命令不发模型、给就近建议；`//` 转义发普通消息。`/model <名>` 运行时热切换模型。需求全图见 `docs/requirements/tui-commands.md`（P1/P2 排好了队）。
+- **命令体系**：命令注册表驱动的 `/help /model /skills /mcp /usage /plan /review /yolo /exit`；输入 `/` 弹补全菜单（前缀优先、↑↓ 选、Tab 补全、Enter 执行、Esc 关）；未知命令不发模型、给就近建议；`//` 转义发普通消息。`/model <名>` 运行时热切换模型。需求全图见 `docs/requirements/tui-commands.md`（P1/P2 排好了队）。
 - **Skills（M3 lite）**：扫 `.tokencode/skills` 并兼容 `.claude/skills`、`.agents/skills`，启动只读 frontmatter，`/技能名 [参数]` 调用时才读正文（渐进披露）；$ARGUMENTS 替换对齐 Claude Code 语义。
 - **MCP（最小 stdio client）**：config.json 的 `"mcp"` 字段配置 server，后台连接绝不阻塞启动；工具以 `mcp__server__tool` 注册进 registry，对 agent 与内置工具零差别；`/mcp` 看状态、`/mcp reconnect <名>` 重连；退出硬 kill 子进程。
 - **流式输出**：三协议都实现 `llm.Streamer`（SSE），TUI 实时显示生成中的文本尾巴（完成后整段 markdown 渲染替换），plain 模式逐段打印；codec 不支持或外壳不要增量时自动回落非流式。
+- **token 用量记账（WebUI 大盘的地基）**：每次模型调用（用户/子代理/racer/裁判/心跳/梦/headless/serve 全路径）把 in/out/cache 用量追加进 `$XDG_DATA_HOME/tokencode/usage/YYYY-MM.jsonl`（append-only、损坏行跳过、失败静默不影响对话）；三协议含流式都解析 usage（含缓存读写）；`/usage`（别名 `/cost` `/stats`）看本月/今日合计与按模型/来源排行，聚合经 `usage.Summarize` 供将来 WebUI 共用。
 - **会话持久化**：每拍结束把新留下的历史追加进 `$XDG_DATA_HOME/tokencode/sessions/YYYY/MM/DD/<id>.jsonl`（append-only，崩溃安全，半行损坏自动跳过）；`-continue` 继续当前目录最近会话、`-resume <id>` 指定恢复、`-no-session` 关闭；心跳空转拍剔除后不落盘（水位线机制）。
 - **Event 即拍**：用户消息、心跳、梦醒是同一个 `Event` 原语的不同来源，agent 是消费 `chan Event` 的 actor，所有 turn 串行（单写者）。
 - **心跳**（`-heartbeat 30m` 显式开启）：三级短路省 token——L0 本地检查零 token → L1 空转回哨兵 `HEARTBEAT_OK` 即从历史剔除 → L2 真有事才完整跑；非交互 turn 只读放行、写类拒绝。
@@ -45,6 +46,7 @@ internal/config/           模型注册表 + MCP server 配置（JSON）+ 内置
 internal/catalog/          embed 的 models.dev provider 目录（协议映射 / 端点 / key 探测）
 internal/auth/             provider 凭据存储（auth.json，0600，`tokencode auth` 子命令）
 internal/session/          会话 JSONL 持久化（Create/Open/Append/Load/Latest）
+internal/usage/            token 用量记账（月度 JSONL + Log/Summarize，agent 循环统一拦截）
 internal/skill/            Agent Skills 加载器（frontmatter 索引 + 正文懒加载）
 internal/mcp/              MCP stdio client（JSON-RPC 握手/工具发现/调用 + Manager）
 internal/agent/            Agent：对话状态 + Run/Serve（Event actor）+ Snapshot + 持久化水位线

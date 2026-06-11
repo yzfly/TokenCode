@@ -4,8 +4,12 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+
+	"github.com/yzfly/tokencode/internal/usage"
 )
 
 // command 是注册表里的一条命令（需求文档 REQ-0）。
@@ -39,6 +43,11 @@ func (m model) commands() []command {
 			run: func(m model, args string) (tea.Model, tea.Cmd) { return m.cmdMCP(args) }},
 		{name: "race", argHint: "<N> <任务> | apply | discard", summary: "并行竞赛：N 个 agent 隔离解题，裁判择优",
 			run: func(m model, args string) (tea.Model, tea.Cmd) { return m.cmdRace(args) }},
+		{name: "usage", aliases: []string{"cost", "stats"}, summary: "token 用量：本月/今日合计与排行",
+			run: func(m model, _ string) (tea.Model, tea.Cmd) {
+				m.emit(transItem{kind: tNote, text: usageText(time.Now())})
+				return m, nil
+			}},
 		{name: "agents", summary: "列出可用的子代理类型",
 			run: func(m model, _ string) (tea.Model, tea.Cmd) {
 				m.emit(transItem{kind: tNote, text: m.agentsText()})
@@ -310,6 +319,95 @@ func (m model) agentsText() string {
 	}
 	b.WriteString("\n自定义：.tokencode/agents/ 或 .claude/agents/ 下的 *.md（frontmatter: name/description/tools/model，正文=系统提示）")
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// usageText 拼 /usage 输出：本月合计 + 今天 + 按模型/来源前 5（纯文本表格）。
+// WebUI 大盘将来直接吃 usage.Summarize 的结构化结果，这里只是终端排版。
+func usageText(now time.Time) string {
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	sum, err := usage.Summarize(monthStart, now.Add(time.Second))
+	if err != nil {
+		return "用量统计不可用：" + err.Error()
+	}
+	if sum.Total.Calls == 0 {
+		return fmt.Sprintf("本月（%s）还没有用量记录（部分端点不报 usage 时无账可记）\n账本目录：%s",
+			now.Format("2006-01"), usage.Dir())
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "token 用量 · %s\n\n", now.Format("2006-01"))
+	b.WriteString(usageHeader("范围"))
+	b.WriteString(usageRow("本月", sum.Total))
+	b.WriteString(usageRow("今天", sum.ByDay[now.Format("2006-01-02")]))
+
+	b.WriteString("\n按模型（前 5）\n")
+	b.WriteString(usageHeader("模型"))
+	writeUsageTop(&b, sum.ByModel)
+
+	b.WriteString("\n按来源（前 5）\n")
+	b.WriteString(usageHeader("来源"))
+	writeUsageTop(&b, sum.BySource)
+
+	fmt.Fprintf(&b, "\n账本：%s（JSONL，按月滚动）", usage.Dir())
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// usageHeader 是用量表格的表头行（首列名可变）。
+func usageHeader(first string) string {
+	return "  " + padCell(first, 22) + padNum("调用", 6) + padNum("输入", 10) +
+		padNum("输出", 10) + padNum("缓存读", 10) + padNum("缓存写", 10) + "\n"
+}
+
+// usageRow 是用量表格的一行：首列左对齐、数字列右对齐。
+func usageRow(name string, bk usage.Bucket) string {
+	return "  " + padCell(name, 22) + padNum(fmt.Sprintf("%d", bk.Calls), 6) +
+		padNum(fmtTokens(bk.In), 10) + padNum(fmtTokens(bk.Out), 10) +
+		padNum(fmtTokens(bk.CacheRead), 10) + padNum(fmtTokens(bk.CacheWrite), 10) + "\n"
+}
+
+// writeUsageTop 按 in+out 降序取前 5 写表格行。
+func writeUsageTop(b *strings.Builder, m map[string]usage.Bucket) {
+	type kv struct {
+		k string
+		v usage.Bucket
+	}
+	rows := make([]kv, 0, len(m))
+	for k, v := range m {
+		rows = append(rows, kv{k, v})
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		ti, tj := rows[i].v.In+rows[i].v.Out, rows[j].v.In+rows[j].v.Out
+		if ti != tj {
+			return ti > tj
+		}
+		return rows[i].k < rows[j].k
+	})
+	if len(rows) > 5 {
+		rows = rows[:5]
+	}
+	for _, r := range rows {
+		b.WriteString(usageRow(r.k, r.v))
+	}
+}
+
+// padNum 把 s 左补空格到 w 显示格宽（数字列右对齐；CJK 表头也按格宽算）。
+func padNum(s string, w int) string {
+	if d := w - lipgloss.Width(s); d > 0 {
+		return strings.Repeat(" ", d) + s
+	}
+	return s
+}
+
+// fmtTokens 把 token 数压成可读形态：1234567 → 1.2M、45678 → 45.7k。
+func fmtTokens(n int) string {
+	switch {
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fM", float64(n)/1e6)
+	case n >= 10_000:
+		return fmt.Sprintf("%.1fk", float64(n)/1e3)
+	default:
+		return fmt.Sprintf("%d", n)
+	}
 }
 
 // skillsText 拼 /skills 输出（REQ-3）。

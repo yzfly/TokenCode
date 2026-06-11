@@ -11,6 +11,7 @@ import (
 
 	"github.com/yzfly/tokencode/internal/agent"
 	"github.com/yzfly/tokencode/internal/llm"
+	"github.com/yzfly/tokencode/internal/usage"
 )
 
 // DreamConfig 是做梦配置。零值字段在 NewDreamer 里落默认。
@@ -137,6 +138,15 @@ func (d *Dreamer) Dream(ctx context.Context, history []llm.Message) error {
 	if err != nil {
 		return err
 	}
+	// 梦不走 agent 循环，这里手动记账。
+	usage.Log(usage.Record{
+		Model:      d.cfg.Model,
+		Source:     "dream",
+		In:         resp.Usage.InputTokens,
+		Out:        resp.Usage.OutputTokens,
+		CacheRead:  resp.Usage.CacheReadTokens,
+		CacheWrite: resp.Usage.CacheWriteTokens,
+	})
 	text := strings.TrimSpace(resp.Text)
 	if text == "" {
 		return nil

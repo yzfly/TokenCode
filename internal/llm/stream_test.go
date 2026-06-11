@@ -33,7 +33,7 @@ func collectDeltas() (func(Delta), func() (text, thinking string)) {
 // input_json_delta 分片拼接、message_start/message_delta 的用量与 stop_reason。
 func TestAnthropicStream(t *testing.T) {
 	body := `event: message_start
-data: {"type":"message_start","message":{"usage":{"input_tokens":120}}}
+data: {"type":"message_start","message":{"usage":{"input_tokens":120,"cache_read_input_tokens":80,"cache_creation_input_tokens":16}}}
 
 event: content_block_start
 data: {"type":"content_block_start","index":0,"content_block":{"type":"text"}}
@@ -83,6 +83,9 @@ data: {"type":"message_stop"}
 	if resp.Usage.InputTokens != 120 || resp.Usage.OutputTokens != 34 {
 		t.Fatalf("usage wrong: %+v", resp.Usage)
 	}
+	if resp.Usage.CacheReadTokens != 80 || resp.Usage.CacheWriteTokens != 16 {
+		t.Fatalf("cache usage wrong: %+v", resp.Usage)
+	}
 }
 
 // TestAnthropicStreamError 验证流中 error 事件被包成错误。
@@ -111,7 +114,7 @@ data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"th
 
 data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}
 
-data: {"choices":[],"usage":{"prompt_tokens":120,"completion_tokens":34}}
+data: {"choices":[],"usage":{"prompt_tokens":120,"completion_tokens":34,"prompt_tokens_details":{"cached_tokens":96}}}
 
 data: [DONE]
 
@@ -142,6 +145,9 @@ data: [DONE]
 	if resp.Usage.InputTokens != 120 || resp.Usage.OutputTokens != 34 {
 		t.Fatalf("usage wrong: %+v", resp.Usage)
 	}
+	if resp.Usage.CacheReadTokens != 96 {
+		t.Fatalf("cache usage wrong: %+v", resp.Usage)
+	}
 }
 
 // TestGoogleStream 覆盖 chunk 累积：thought/text 增量、整只 functionCall、
@@ -151,7 +157,7 @@ func TestGoogleStream(t *testing.T) {
 
 data: {"candidates":[{"content":{"role":"model","parts":[{"text":"let me "}]}}]}
 
-data: {"candidates":[{"content":{"role":"model","parts":[{"text":"check"},{"functionCall":{"name":"read","args":{"path":"a.txt"}}}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":120,"candidatesTokenCount":34}}
+data: {"candidates":[{"content":{"role":"model","parts":[{"text":"check"},{"functionCall":{"name":"read","args":{"path":"a.txt"}}}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":120,"candidatesTokenCount":34,"cachedContentTokenCount":64}}
 
 `
 	var gotPath string
@@ -186,6 +192,9 @@ data: {"candidates":[{"content":{"role":"model","parts":[{"text":"check"},{"func
 	}
 	if resp.Usage.InputTokens != 120 || resp.Usage.OutputTokens != 34 {
 		t.Fatalf("usage wrong: %+v", resp.Usage)
+	}
+	if resp.Usage.CacheReadTokens != 64 {
+		t.Fatalf("cache usage wrong: %+v", resp.Usage)
 	}
 }
 

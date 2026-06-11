@@ -89,7 +89,7 @@ func TestFromChatResponseGolden(t *testing.T) {
 			},
 			"finish_reason": "tool_calls"
 		}],
-		"usage": {"prompt_tokens": 120, "completion_tokens": 34}
+		"usage": {"prompt_tokens": 120, "completion_tokens": 34, "prompt_tokens_details": {"cached_tokens": 96}}
 	}`
 	var wr chatResponse
 	if err := json.Unmarshal([]byte(raw), &wr); err != nil {
@@ -111,6 +111,9 @@ func TestFromChatResponseGolden(t *testing.T) {
 	}
 	if resp.Usage.InputTokens != 120 || resp.Usage.OutputTokens != 34 {
 		t.Fatalf("usage wrong: %+v", resp.Usage)
+	}
+	if resp.Usage.CacheReadTokens != 96 || resp.Usage.CacheWriteTokens != 0 {
+		t.Fatalf("cache usage wrong: %+v", resp.Usage)
 	}
 	if len(resp.ToolUses) != 2 {
 		t.Fatalf("expected 2 tool uses, got %+v", resp.ToolUses)

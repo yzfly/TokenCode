@@ -114,6 +114,11 @@ func (r *Runner) SpawnDef(ctx context.Context, def Def, prompt string, opts Spaw
 		client, model = c, m
 	}
 
+	label := opts.Label
+	if label == "" {
+		label = def.Name
+	}
+
 	reg := r.subRegistry(def.Tools)
 	if opts.Root != "" {
 		reg.SetRoot(opts.Root)
@@ -121,11 +126,7 @@ func (r *Runner) SpawnDef(ctx context.Context, def Def, prompt string, opts Spaw
 	sub := agent.New(client, reg, model, r.MaxTokens)
 	sub.SetSystem(subSystem(def, opts.Root))
 	sub.SetMaxCalls(maxCallsPerAgent)
-
-	label := opts.Label
-	if label == "" {
-		label = def.Name
-	}
+	sub.SetUsageSource("subagent:" + label) // 记账来源：racer 即 subagent:racer#N
 	ui := agent.UI{}
 	switch {
 	case opts.UI != nil:

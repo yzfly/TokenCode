@@ -29,7 +29,7 @@ func TestAnthropicRequestAndParse(t *testing.T) {
 				{"type": "tool_use", "id": "tu_1", "name": "read", "input": {"path": "a.txt"}}
 			],
 			"stop_reason": "tool_use",
-			"usage": {"input_tokens": 120, "output_tokens": 34}
+			"usage": {"input_tokens": 120, "output_tokens": 34, "cache_read_input_tokens": 80, "cache_creation_input_tokens": 16}
 		}`)
 	}))
 	defer srv.Close()
@@ -60,6 +60,9 @@ func TestAnthropicRequestAndParse(t *testing.T) {
 	}
 	if resp.Usage.InputTokens != 120 || resp.Usage.OutputTokens != 34 {
 		t.Fatalf("usage wrong: %+v", resp.Usage)
+	}
+	if resp.Usage.CacheReadTokens != 80 || resp.Usage.CacheWriteTokens != 16 {
+		t.Fatalf("cache usage wrong: %+v", resp.Usage)
 	}
 	if len(resp.ToolUses) != 1 || resp.ToolUses[0].ID != "tu_1" || resp.ToolUses[0].Name != "read" {
 		t.Fatalf("tool_use parse wrong: %+v", resp.ToolUses)

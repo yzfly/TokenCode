@@ -12,6 +12,7 @@ import (
 
 	"github.com/yzfly/tokencode/internal/llm"
 	"github.com/yzfly/tokencode/internal/tools"
+	"github.com/yzfly/tokencode/internal/usage"
 )
 
 // UI 是 agent 与外界交互的回调（打印 / 确认）。各回调可为 nil。
@@ -45,6 +46,7 @@ type Agent struct {
 	maxTokens int
 	system    string // 自定义系统提示（子代理用）；空=默认 SystemPrompt()
 	maxCalls  int    // 单 turn 模型调用次数上限；0=不限（子代理防失控用）
+	usageSrc  string // 记账来源标签（usage.Record.Source）；空=默认 "user"
 
 	mu      sync.Mutex
 	msgs    []llm.Message
@@ -93,6 +95,34 @@ func (a *Agent) SetSystem(s string) {
 // SetMaxCalls 限制单 turn 的模型调用次数（0=不限）。子代理用它防失控循环。
 func (a *Agent) SetMaxCalls(n int) {
 	a.maxCalls = n
+}
+
+// SetUsageSource 设置记账来源标签（如 "subagent:racer#1"、"headless"）。
+// 空 / 不设置等价于默认的 "user"。装配时调用一次即可。
+func (a *Agent) SetUsageSource(s string) {
+	a.mu.Lock()
+	a.usageSrc = s
+	a.mu.Unlock()
+}
+
+// swapUsageSource 换上 per-turn 的来源标签并返回旧值（serve actor 给
+// heartbeat/dream 拍打标用）。turn 串行执行（单写者），换/还原不会交错。
+func (a *Agent) swapUsageSource(s string) string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	old := a.usageSrc
+	a.usageSrc = s
+	return old
+}
+
+// usageSource 取当前来源标签（每次模型调用记账时读一次）。
+func (a *Agent) usageSource() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.usageSrc == "" {
+		return "user"
+	}
+	return a.usageSrc
 }
 
 // client 取当前客户端与模型（每次模型调用前读一次，配合 SetClient）。
@@ -217,6 +247,16 @@ func (a *Agent) runTurn(ctx context.Context, userInput string, ui UI) error {
 		if err != nil {
 			return err
 		}
+		// 统一记账拦截点：所有路径（TUI/Serve/headless/子代理）的模型调用
+		// 都经过这里。全零用量（端点未提供）由 usage.Log 内部丢弃。
+		usage.Log(usage.Record{
+			Model:      model,
+			Source:     a.usageSource(),
+			In:         resp.Usage.InputTokens,
+			Out:        resp.Usage.OutputTokens,
+			CacheRead:  resp.Usage.CacheReadTokens,
+			CacheWrite: resp.Usage.CacheWriteTokens,
+		})
 
 		a.append(llm.Message{
 			Role:     llm.RoleAssistant,

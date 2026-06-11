@@ -24,6 +24,7 @@ import (
 	"github.com/yzfly/tokencode/internal/subagent"
 	"github.com/yzfly/tokencode/internal/tools"
 	"github.com/yzfly/tokencode/internal/tui"
+	"github.com/yzfly/tokencode/internal/usage"
 	"github.com/yzfly/tokencode/internal/workflow"
 )
 
@@ -200,6 +201,15 @@ func main() {
 				if err != nil {
 					return "", err
 				}
+				// 裁判不走 agent 循环，这里手动记账。
+				usage.Log(usage.Record{
+					Model:      model,
+					Source:     "race:judge",
+					In:         resp.Usage.InputTokens,
+					Out:        resp.Usage.OutputTokens,
+					CacheRead:  resp.Usage.CacheReadTokens,
+					CacheWrite: resp.Usage.CacheWriteTokens,
+				})
 				return resp.Text, nil
 			},
 			Progress: progress,
@@ -316,6 +326,15 @@ func makeAutoJudge(cfg config.Config, ag *agent.Agent) tui.AutoJudge {
 		if err != nil {
 			return false, "", err
 		}
+		// 裁决器不走 agent 循环，这里手动记账。
+		usage.Log(usage.Record{
+			Model:      model,
+			Source:     "auto:judge",
+			In:         resp.Usage.InputTokens,
+			Out:        resp.Usage.OutputTokens,
+			CacheRead:  resp.Usage.CacheReadTokens,
+			CacheWrite: resp.Usage.CacheWriteTokens,
+		})
 		verdict := strings.TrimSpace(resp.Text)
 		switch upper := strings.ToUpper(verdict); {
 		case strings.HasPrefix(upper, "ALLOW"):

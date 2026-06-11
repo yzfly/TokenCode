@@ -53,7 +53,7 @@ func cmdServe(args []string) int {
 			if name == "" {
 				name = def
 			}
-			return assembleHeadless(cfg, name, "", *maxTokens, allowed, false)
+			return assembleHeadless(cfg, name, "", *maxTokens, allowed, false, "serve")
 		},
 	}
 	httpSrv := &http.Server{Addr: *addr, Handler: srv.Handler()}

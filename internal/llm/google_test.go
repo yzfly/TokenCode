@@ -64,7 +64,7 @@ func TestFromGeminiResponseGolden(t *testing.T) {
 			]},
 			"finishReason": "STOP"
 		}],
-		"usageMetadata": {"promptTokenCount": 120, "candidatesTokenCount": 34}
+		"usageMetadata": {"promptTokenCount": 120, "candidatesTokenCount": 34, "cachedContentTokenCount": 64}
 	}`
 	var wr geminiResponse
 	if err := json.Unmarshal([]byte(raw), &wr); err != nil {
@@ -87,6 +87,9 @@ func TestFromGeminiResponseGolden(t *testing.T) {
 	}
 	if resp.Usage.InputTokens != 120 || resp.Usage.OutputTokens != 34 {
 		t.Fatalf("usage wrong: %+v", resp.Usage)
+	}
+	if resp.Usage.CacheReadTokens != 64 || resp.Usage.CacheWriteTokens != 0 {
+		t.Fatalf("cache usage wrong: %+v", resp.Usage)
 	}
 	if len(resp.ToolUses) != 2 {
 		t.Fatalf("expected 2 tool uses, got %+v", resp.ToolUses)
