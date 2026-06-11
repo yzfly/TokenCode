@@ -285,8 +285,9 @@ go vet ./...
 - [x] 子代理（agent 工具）+ 动态工作流（workflow JS 编排）+ 联网搜索（Tavily/DDG/Mojeek）
 - [x] A · 横向爆破（竞赛）v1：`/race` 派 N 个、worktree 隔离、裁判择优 ——*打磨中：败者提前退钱、投票裁判、预算建模*
 - [x] 模型与国内 coding plan 开箱即用（内置 models.dev 目录 + `tokencode auth login`）
-- [ ] 团队接入：IM 通道体系（飞书/钉钉长连接 → 微信扫码/企微），每成员独立工作空间
-- [ ] SDK/CLI 可编程化与 WebUI 用量大盘 ——*headless `-p`、`serve`、Go SDK（`pkg/tokencode`）已落地，余 WebUI*
+- [x] 团队接入 v1：IM 通道体系——飞书/钉钉官方长连接 + 微信 iLink 扫码（实验性），配对码绑定、每成员独立工作空间
+- [x] SDK/CLI 可编程化与 WebUI：headless `-p`、`serve` HTTP API、Go SDK（`pkg/tokencode`）、WebUI 大盘/聊天/团队/模型四页
+- [x] CC 对标第一批：/compact + /context、权限规则三表、hooks 四事件、/rewind 检查点、`-w` worktree
 - [ ] 工作区权威（单写者）+ 三方合并：B · 协作模式的并行写
 
 ## 参与 / 了解进展
