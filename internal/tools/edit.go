@@ -73,6 +73,7 @@ func (editTool) Execute(ctx context.Context, input json.RawMessage) (string, err
 		repl = n
 		out = strings.ReplaceAll(content, a.OldString, a.NewString)
 	}
+	notifyCheckpoint(ctx, path) // 校验都过了才快照，失败的 edit 不留检查点记录
 	if err := os.WriteFile(path, []byte(out), 0o644); err != nil {
 		return "", err
 	}

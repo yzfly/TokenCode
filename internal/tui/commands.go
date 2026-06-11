@@ -3,12 +3,14 @@ package tui
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/yzfly/tokencode/internal/checkpoint"
 	"github.com/yzfly/tokencode/internal/usage"
 )
 
@@ -48,6 +50,8 @@ func (m model) commands() []command {
 				m.emit(transItem{kind: tNote, text: usageText(time.Now())})
 				return m, nil
 			}},
+		{name: "rewind", argHint: "[n|clear]", summary: "文件检查点：列出/回滚 write·edit 改动（不回滚对话）",
+			run: func(m model, args string) (tea.Model, tea.Cmd) { return m.cmdRewind(args) }},
 		{name: "compact", argHint: "[侧重点]", summary: "压缩历史上下文为摘要（长会话续命）",
 			run: func(m model, args string) (tea.Model, tea.Cmd) { return m.cmdCompact(args) }},
 		{name: "context", summary: "上下文用量：估算 tokens、消息占比与压缩余量",
@@ -307,6 +311,61 @@ func (m model) cmdModel(args string) (tea.Model, tea.Cmd) {
 	m.emit(transItem{kind: tNote, text: fmt.Sprintf("→ 模型：%s（%s）", newModel, newBase)})
 	m.rebuildContent() // banner 里有模型名，整体重排一次
 	return m, nil
+}
+
+// cmdRewind：无参列检查点；"clear" 清空；数字 n 回滚到第 n 个检查点。
+// 只恢复 write/edit 改过的文件，不回滚对话历史；bash 的改动拦不到。
+func (m model) cmdRewind(args string) (tea.Model, tea.Cmd) {
+	if m.checkpoint == nil {
+		m.emit(transItem{kind: tNote, text: "检查点不可用（本会话未开启）"})
+		return m, nil
+	}
+	switch args {
+	case "":
+		m.emit(transItem{kind: tNote, text: rewindListText(m.checkpoint.List())})
+		return m, nil
+	case "clear":
+		if err := m.checkpoint.Clear(); err != nil {
+			m.emit(transItem{kind: tErr, text: "清空检查点失败：" + err.Error()})
+			return m, nil
+		}
+		m.emit(transItem{kind: tNote, text: "→ 已清空本会话检查点"})
+		return m, nil
+	}
+	n, err := strconv.Atoi(args)
+	if err != nil {
+		m.emit(transItem{kind: tErr, text: "用法：/rewind 列检查点 · /rewind <n> 回滚 · /rewind clear 清空"})
+		return m, nil
+	}
+	restored, err := m.checkpoint.Rewind(n)
+	if err != nil {
+		m.emit(transItem{kind: tErr, text: "回滚失败：" + err.Error()})
+		if len(restored) == 0 {
+			return m, nil
+		}
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "→ 已回滚到检查点 #%d，恢复 %d 个文件（只回滚文件，对话历史保持不变）\n", n, len(restored))
+	for _, p := range restored {
+		b.WriteString("  · " + p + "\n")
+	}
+	m.emit(transItem{kind: tNote, text: strings.TrimRight(b.String(), "\n")})
+	return m, nil
+}
+
+// rewindListText 拼 /rewind 的检查点列表（按 turn 分组）。
+func rewindListText(pts []checkpoint.Point) string {
+	if len(pts) == 0 {
+		return "本会话还没有检查点（write/edit 第一次改文件时自动记录；bash 的改动拦不到）"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "检查点（%d 个）· /rewind <n> 回滚到该点改动之前 · /rewind clear 清空\n", len(pts))
+	for _, p := range pts {
+		fmt.Fprintf(&b, "  #%d  %s · %s · %d 个文件\n",
+			p.N, p.Time.Format("15:04:05"), strings.Join(p.Tools, "+"), p.Files)
+	}
+	b.WriteString("注意：只回滚文件改动，不回滚对话；bash 命令造成的改动不在检查点内")
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // agentsText 拼 /agents 输出：可用子代理类型与各自的工具面。

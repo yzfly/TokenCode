@@ -32,6 +32,10 @@ type Registry struct {
 	tools map[string]Tool
 	order []string
 	root  string // per-agent 工具根；空=不限制（主 agent）
+	// checkpoint 是可选的写盘前快照钩子：write/edit 在覆盖文件前回调它
+	// 记录原内容（/rewind 的物质基础）。Registry 级字段而非全局——竞赛
+	// racer 的注册表有 worktree 隔离不需要、也不该误触主仓库的检查点。
+	checkpoint func(tool, path string)
 }
 
 // NewRegistry 用给定工具建一个注册表。
@@ -79,6 +83,13 @@ func (r *Registry) SetRoot(root string) { r.root = root }
 // Root 返回注册表绑定的工具根（空=不限制）。
 func (r *Registry) Root() string { return r.root }
 
+// SetCheckpointer 挂上写盘前快照钩子（nil=关闭）。fn 收到工具名与解析后的
+// 绝对路径，在文件被覆盖/创建之前调用。注意 bash 不经此钩子（已知盲区）。
+func (r *Registry) SetCheckpointer(fn func(tool, path string)) { r.checkpoint = fn }
+
+// Checkpointer 返回当前挂载的快照钩子（nil=未开启）。
+func (r *Registry) Checkpointer() func(tool, path string) { return r.checkpoint }
+
 // Execute 找到并执行工具；找不到返回错误。注册表绑定了根时注入 ctx，
 // 文件/bash 工具据此解析与守卫路径。
 func (r *Registry) Execute(ctx context.Context, name string, input json.RawMessage) (string, error) {
@@ -88,6 +99,10 @@ func (r *Registry) Execute(ctx context.Context, name string, input json.RawMessa
 	}
 	if r.root != "" {
 		ctx = WithRoot(ctx, r.root)
+	}
+	if fn := r.checkpoint; fn != nil {
+		// 绑定工具名后注入 ctx，write/edit 写盘前回调（见 guard.go）。
+		ctx = withCheckpoint(ctx, func(path string) { fn(name, path) })
 	}
 	return t.Execute(ctx, input)
 }

@@ -47,6 +47,7 @@ func (writeTool) Execute(ctx context.Context, input json.RawMessage) (string, er
 	if err != nil {
 		return "", err
 	}
+	notifyCheckpoint(ctx, path) // 覆盖前快照原内容（/rewind 用）
 	if dir := filepath.Dir(path); dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return "", err

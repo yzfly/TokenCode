@@ -13,6 +13,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/yzfly/tokencode/internal/agent"
+	"github.com/yzfly/tokencode/internal/checkpoint"
 	"github.com/yzfly/tokencode/internal/config"
 	"github.com/yzfly/tokencode/internal/hooks"
 	"github.com/yzfly/tokencode/internal/mcp"
@@ -34,14 +35,16 @@ type Options struct {
 	Idle    *pulse.IdleTracker // 用户活动追踪，可为 nil
 	Pulse   *pulse.Pulse       // 心跳源，nil=关闭；仅 tty 模式生效
 
-	Cfg         config.Config    // /model 列表
-	Hooks       *hooks.Runner    // hooks 运行器，可为 nil；外壳接管 Notify 让提示走 note
-	Skills      []skill.Skill    // /skills 与 /技能名
-	MCP         *mcp.Manager     // /mcp 状态，可为 nil
-	Agents      *subagent.Runner // 子代理运行器，可为 nil；外壳启动时注入 UI 工厂
-	AutoJudge   AutoJudge        // auto 模式权限裁决器，可为 nil
-	Rules       *permrules.Rules // 权限规则三表（全局+项目级已合并），可为 nil
-	Workspace   string           // 工作空间隔离根（显示用）；空=未开启
+	Cfg         config.Config            // /model 列表
+	Hooks       *hooks.Runner            // hooks 运行器，可为 nil；外壳接管 Notify 让提示走 note
+	Skills      []skill.Skill            // /skills 与 /技能名
+	MCP         *mcp.Manager             // /mcp 状态，可为 nil
+	Agents      *subagent.Runner         // 子代理运行器，可为 nil；外壳启动时注入 UI 工厂
+	AutoJudge   AutoJudge                // auto 模式权限裁决器，可为 nil
+	Rules       *permrules.Rules         // 权限规则三表（全局+项目级已合并），可为 nil
+	Workspace   string                   // 工作空间隔离根（显示用）；空=未开启
+	Worktree    string                   // -w 的 worktree 名（状态栏显示）；空=未开启
+	Checkpoint  *checkpoint.Checkpointer // 文件检查点（/rewind），可为 nil
 	SwitchModel func(name string) (model, baseURL string, err error)
 	Version     string // /help 头部显示
 
@@ -81,6 +84,7 @@ func Run(ag *agent.Agent, opts Options) error {
 	m.agent = ag
 	m.cfg, m.skills, m.mcp, m.switchModel = opts.Cfg, opts.Skills, opts.MCP, opts.SwitchModel
 	m.version, m.workspace = opts.Version, opts.Workspace
+	m.worktree, m.checkpoint = opts.Worktree, opts.Checkpoint
 	if opts.Agents != nil {
 		m.agentDefs = opts.Agents.Defs()
 	}

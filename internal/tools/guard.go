@@ -57,6 +57,23 @@ func rootFrom(ctx context.Context) string {
 	return r
 }
 
+// ctxCheckpointKey 是写盘前快照钩子在 ctx 里的键（Registry.Execute 注入，
+// 已绑定工具名）。
+type ctxCheckpointKey struct{}
+
+// withCheckpoint 把快照钩子写进 ctx。
+func withCheckpoint(ctx context.Context, fn func(path string)) context.Context {
+	return context.WithValue(ctx, ctxCheckpointKey{}, fn)
+}
+
+// notifyCheckpoint 在覆盖/创建文件前回调快照钩子（未挂载时零开销）。
+// path 必须是 resolvePath 之后的绝对路径。
+func notifyCheckpoint(ctx context.Context, path string) {
+	if fn, _ := ctx.Value(ctxCheckpointKey{}).(func(string)); fn != nil {
+		fn(path)
+	}
+}
+
 // resolvePath 把工具收到的路径解析为绝对路径并做隔离校验：
 // 相对路径基于 ctx 根（无根则进程 cwd）解析；结果必须同时落在
 // ctx 根与全局 workspace 之内（各自未开启则不约束）。
