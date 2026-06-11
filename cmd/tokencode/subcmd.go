@@ -10,7 +10,7 @@ import (
 	"github.com/yzfly/tokencode/internal/catalog"
 )
 
-// runSubcommand 分发 flag 之外的子命令（auth / models / serve）。
+// runSubcommand 分发 flag 之外的子命令（auth / models / serve / team）。
 // 返回 handled=false 表示不是子命令，主流程继续走 TUI。
 func runSubcommand(args []string) (handled bool, code int) {
 	if len(args) == 0 {
@@ -23,6 +23,8 @@ func runSubcommand(args []string) (handled bool, code int) {
 		return true, cmdModels(args[1:])
 	case "serve":
 		return true, cmdServe(args[1:])
+	case "team":
+		return true, cmdTeam(args[1:])
 	}
 	return false, 0
 }

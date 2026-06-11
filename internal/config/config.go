@@ -52,7 +52,22 @@ type Config struct {
 	AutoModel    string                      `json:"auto_model"` // auto 模式权限裁决用的小模型（别名或 provider/model-id）；空=用主模型
 	MCP          map[string]mcp.ServerConfig `json:"mcp"`        // MCP server 名 → stdio 配置
 	Race         RaceConfig                  `json:"race"`       // 并行竞赛模式（/race）
+	Channels     ChannelsConfig              `json:"channels"`   // IM 通道（团队模式，serve 时启用）
 }
+
+// ChannelsConfig 是各 IM 通道的接入凭据。纯配置：adapter 实现在 internal/channel 下。
+type ChannelsConfig struct {
+	Feishu FeishuChannel `json:"feishu"`
+}
+
+// FeishuChannel 是飞书自建应用凭据（长连接接入，免公网 IP）。
+type FeishuChannel struct {
+	AppID     string `json:"app_id"`
+	AppSecret string `json:"app_secret"`
+}
+
+// Enabled 报告飞书通道是否配置完整。
+func (f FeishuChannel) Enabled() bool { return f.AppID != "" && f.AppSecret != "" }
 
 // RaceConfig 是竞赛模式的可调参数。
 type RaceConfig struct {

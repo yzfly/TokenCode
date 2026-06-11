@@ -69,9 +69,11 @@ func splitTools(s string) []string {
 
 // assembleHeadless 装配一个无界面 agent：模型解析 → 客户端 → 带白名单守卫的
 // 工具注册表（含子代理与 workflow，守卫在工具层、子代理经共享注册表自动继承）
-// → agent。-p 用一次，serve 每请求用一次（stateless）。跳过 TUI/心跳/会话/MCP。
-// usageSource 标识装配方（"headless" / "serve"），落进用量记账的 Source。
-func assembleHeadless(cfg config.Config, modelName, baseURLFlag string, maxTokens int, allowed []string, yolo bool, usageSource string) (*agent.Agent, string, error) {
+// → agent。-p 用一次，serve 每请求用一次（stateless），IM 通道每会话用一次。
+// usageSource 标识装配方（"headless" / "serve" / "channel:feishu"），落进用量
+// 记账的 Source。root 非空时注册表 SetRoot：文件工具被硬隔离在该工作空间内、
+// bash 在其下执行、子代理定义也从那里发现（通道按成员绑定的 workspace 传入）。
+func assembleHeadless(cfg config.Config, modelName, baseURLFlag string, maxTokens int, allowed []string, yolo bool, usageSource, root string) (*agent.Agent, string, error) {
 	tgt, err := cfg.Resolve(modelName)
 	if err != nil {
 		return nil, "", err
@@ -80,9 +82,11 @@ func assembleHeadless(cfg config.Config, modelName, baseURLFlag string, maxToken
 	if err != nil {
 		return nil, "", err
 	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		cwd = "."
+	cwd := root
+	if cwd == "" {
+		if cwd, err = os.Getwd(); err != nil {
+			cwd = "."
+		}
 	}
 
 	allow := headless.Allow(allowed, yolo)
@@ -90,6 +94,9 @@ func assembleHeadless(cfg config.Config, modelName, baseURLFlag string, maxToken
 	for _, t := range []tools.Tool{tools.Read(), tools.Write(), tools.Edit(), tools.Bash(),
 		tools.WebSearch(), tools.WebFetch()} {
 		reg.Add(headless.GateTool(t, allow))
+	}
+	if root != "" {
+		reg.SetRoot(root)
 	}
 	ag := agent.New(client, reg, tgt.Model, maxTokens)
 	ag.SetUsageSource(usageSource)
@@ -117,7 +124,7 @@ func runHeadless(cfg config.Config, modelName, baseURL string, maxTokens int, pr
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	ag, model, err := assembleHeadless(cfg, modelName, baseURL, maxTokens, allowed, yolo, "headless")
+	ag, model, err := assembleHeadless(cfg, modelName, baseURL, maxTokens, allowed, yolo, "headless", "")
 	if err != nil {
 		emitHeadlessFailure(output, modelName, err)
 		return 1

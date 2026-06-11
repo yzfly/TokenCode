@@ -11,7 +11,10 @@ import (
 	"time"
 
 	"github.com/yzfly/tokencode/internal/agent"
+	"github.com/yzfly/tokencode/internal/channel"
+	"github.com/yzfly/tokencode/internal/channel/feishu"
 	"github.com/yzfly/tokencode/internal/config"
+	"github.com/yzfly/tokencode/internal/headless"
 	"github.com/yzfly/tokencode/internal/llm"
 	"github.com/yzfly/tokencode/internal/serve"
 )
@@ -53,13 +56,33 @@ func cmdServe(args []string) int {
 			if name == "" {
 				name = def
 			}
-			return assembleHeadless(cfg, name, "", *maxTokens, allowed, false, "serve")
+			return assembleHeadless(cfg, name, "", *maxTokens, allowed, false, "serve", "")
 		},
 	}
 	httpSrv := &http.Server{Addr: *addr, Handler: srv.Handler()}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// IM 通道（团队模式）：config 配了 channels 才起。每个成员绑定一个
+	// workspace，agent 常驻（内存历史），工具被硬隔离在该 workspace 之内。
+	if cfg.Channels.Feishu.Enabled() {
+		logf := func(format string, args ...any) { fmt.Printf(format+"\n", args...) }
+		router := channel.NewRouter(channel.NewStore(""), func(b channel.Binding) (*agent.Agent, string, error) {
+			name := b.Model
+			if name == "" {
+				name = def
+			}
+			allowed := b.AllowedTools
+			if len(allowed) == 0 {
+				allowed = headless.DefaultAllowed
+			}
+			return assembleHeadless(cfg, name, "", *maxTokens, allowed, b.Yolo, "channel:"+b.Channel, b.Workspace)
+		}, logf)
+		router.Register(feishu.New(feishu.Config{AppID: cfg.Channels.Feishu.AppID, AppSecret: cfg.Channels.Feishu.AppSecret}, logf))
+		router.Start(ctx)
+		fmt.Println("通道 feishu 启动中（长连接，免公网 IP）· 配对：tokencode team pair -workspace <目录>")
+	}
 	errCh := make(chan error, 1)
 	go func() { errCh <- httpSrv.ListenAndServe() }()
 	fmt.Printf("tokencode serve · %s · GET /healthz · POST /v1/run（Accept: text/event-stream 走 SSE）· Ctrl-C 退出\n", *addr)

@@ -89,6 +89,7 @@ TokenCode 要做的是「**为并行而生的运行时**」：并行是底座，
 
 MVP 阶段的「未做」清单与尚未关闭的开放问题：
 
+- **团队接入（IM 通道）— 进行中（飞书 v1 已落地，2026-06-11）**：`internal/channel` 通道抽象（Adapter/Router/team store）+ 飞书长连接 adapter——成员在 IM 里发配对码绑定自己的工作空间，单聊驱动各自的常驻 agent（工具根硬隔离 + 白名单）。待续：钉钉 Stream、企微智能机器人、微信 iLink；卡片流式进度与权限审批按钮。
 - **streaming**：改 llm 层解 SSE，逐字流式输出。要小心别重蹈 opencode 的「每 token 重渲染」卡顿。
 - **会话持久化**：JSONL 树 / 分支、历史存盘。
 - ~~多 provider~~ **已落地**：anthropic / openai-chat 双协议 codec + config 模型注册表（见 [`STATUS.md`](STATUS.md)）；Responses API / Gemini 原生等长尾协议按需加。
