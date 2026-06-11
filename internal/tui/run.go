@@ -15,6 +15,7 @@ import (
 	"github.com/yzfly/tokencode/internal/agent"
 	"github.com/yzfly/tokencode/internal/config"
 	"github.com/yzfly/tokencode/internal/mcp"
+	"github.com/yzfly/tokencode/internal/permrules"
 	"github.com/yzfly/tokencode/internal/pulse"
 	"github.com/yzfly/tokencode/internal/race"
 	"github.com/yzfly/tokencode/internal/skill"
@@ -37,6 +38,7 @@ type Options struct {
 	MCP         *mcp.Manager     // /mcp 状态，可为 nil
 	Agents      *subagent.Runner // 子代理运行器，可为 nil；外壳启动时注入 UI 工厂
 	AutoJudge   AutoJudge        // auto 模式权限裁决器，可为 nil
+	Rules       *permrules.Rules // 权限规则三表（全局+项目级已合并），可为 nil
 	Workspace   string           // 工作空间隔离根（显示用）；空=未开启
 	SwitchModel func(name string) (model, baseURL string, err error)
 	Version     string // /help 头部显示
@@ -96,7 +98,7 @@ func Run(ag *agent.Agent, opts Options) error {
 	}
 	p = tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
-	br := &bridge{prog: p, perms: perms, judge: opts.AutoJudge}
+	br := &bridge{prog: p, perms: perms, judge: opts.AutoJudge, rules: opts.Rules}
 	ui := br.UI()
 
 	// 子代理与工作流接同一座桥：权限闸门、转写显示与主 agent 完全同源。
@@ -125,13 +127,17 @@ func runPlain(ag *agent.Agent, opts Options) error {
 	if opts.Notice != "" {
 		fmt.Println(opts.Notice)
 	}
-	// 子代理在 plain 模式下沿用同一条非交互策略：只读放行，其余看 -yolo。
+	// deny 规则全局生效：plain 模式也先查 deny，再走「只读放行，其余看 -yolo」。
+	denied := func(name string, input json.RawMessage) bool {
+		return opts.Rules.Evaluate(name, input) == permrules.Deny
+	}
+	// 子代理在 plain 模式下沿用同一条非交互策略。
 	if opts.Agents != nil {
 		opts.Agents.UI = func(label string) agent.UI {
 			return agent.UI{
 				OnToolCall: func(name string, input json.RawMessage) bool {
 					fmt.Printf("  → [%s] %s %s\n", label, name, oneLine(compactJSON(input), 120))
-					return yolo || name == "read"
+					return !denied(name, input) && (yolo || name == "read")
 				},
 			}
 		}
@@ -157,7 +163,8 @@ func runPlain(ag *agent.Agent, opts Options) error {
 		},
 		OnToolCall: func(name string, input json.RawMessage) bool {
 			fmt.Printf("  → %s %s\n", name, oneLine(compactJSON(input), 120))
-			return yolo || name == "read" // 非交互：只读放行，其余除非 -yolo 否则拒绝
+			// 非交互：deny 规则先拒，再只读放行，其余除非 -yolo 否则拒绝。
+			return !denied(name, input) && (yolo || name == "read")
 		},
 		OnToolResult: func(name, result string, isErr bool) {
 			mark := "✓"

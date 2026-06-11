@@ -33,7 +33,8 @@
 - **心跳**（`-heartbeat 30m` 显式开启）：三级短路省 token——L0 本地检查零 token → L1 空转回哨兵 `HEARTBEAT_OK` 即从历史剔除 → L2 真有事才完整跑；非交互 turn 只读放行、写类拒绝。
 - **自动做梦**：空闲 ∧ 有料双条件触发，独立 goroutine 调一次 LLM 把会话压缩成 `.tokencode/memory.md`，system prompt 注入「长期记忆」——重启也记得。
 - Bubble Tea TUI（alt-screen + viewport）：glamour markdown 每条渲染一次进缓存、DeepSeek 蓝主题、亮/暗自适应、鼠标滚轮滚动、字符 logo + 欢迎卡、等待时 spinner。
-- 权限三模式：**plan**（只读）/ **review**（逐次 y/n/a 确认，默认）/ **yolo**（全放行）；Shift+Tab 循环或 `/plan` `/review` `/yolo` 切换。
+- 权限四模式：**plan**（只读）/ **review**（逐次 y/n/a 确认，默认）/ **auto**（小模型按规则裁决）/ **yolo**（全放行）；Shift+Tab 循环或 `/plan` `/review` `/auto` `/yolo` 切换。
+- **权限规则三表（CC 语法，团队治理地基）**：config.json 的 `permissions` + 项目级 `.tokencode/permissions.json`（合并取并集）声明 `allow`/`ask`/`deny`——`read`、`bash(git log *)`、`agent(explore)`、`mcp__server__*` 这类规则；bash 复合命令拆段逐判（任一段 deny 即 deny、全段 allow 才 allow、命令替换段永不 allow）。优先级 deny > plan 只读铁律 > ask（yolo/auto 也强制人工确认）> allow > 模式默认；deny 在 TUI/headless/serve/IM 通道全入口生效。与 `.tokencode/permissions.md`（auto 裁决器的自然语言软提示）并存分工。
 - 跑动中 Ctrl-C 打断当前轮、回提示符；非 tty（管道/重定向）自动退化为纯文本。
 - **Headless 与 HTTP API（SDK/通道/WebUI 的共同地基）**：`-p` 跑一个 turn 即退出（`-output text|json|stream-json`，stream-json 是 JSONL 事件流、最后一行恒为 result；成功 0 / 出错 1）；`tokencode serve` 起 HTTP API（`GET /healthz` + `POST /v1/run`，同步 JSON 或 SSE 流，默认仅回环、`-max-concurrent` 信号量限流、每请求独立 agent）。两条入口共用 `internal/headless` 的执行/事件/白名单语义：守卫包在工具层（白名单外喂回 "rejected (headless)"），子代理经共享注册表自动继承。
 - **团队模式 · IM 通道（飞书 v1）**：成员用自己的飞书账号远程驱动自己的工作空间——`internal/channel` 通道抽象（Adapter/Router/team store）+ 飞书长连接 adapter（官方 SDK ws，免公网 IP，3 秒 ack 红线内异步投递、event_id 去重）。`tokencode team pair -workspace <目录>` 生成 8 位配对码（1 小时/单次有效，最多 3 个 pending，存 `team.json` 0600 原子写），成员在 IM 单聊发码即绑定；绑定可配工具白名单（默认只读集）/ yolo / 专属模型。每个 `channel+user+chat` 一个常驻 agent（内存历史、TryLock 互斥，在跑时新消息回「稍候」），turn 开始回「收到」、结束回最终文本；工具被 SetRoot 硬隔离在成员 workspace 内，用量记账 Source=`channel:<名>`。钉钉 Stream adapter 同构落地（官方 SDK 长连接收机器人单聊、msgId 去重、sessionWebhook 回文本），与飞书共用 Router 与配对流程。v0 边界：只处理单聊文本，卡片流式/审批按钮/群聊/企微后置。
@@ -58,6 +59,7 @@ internal/pulse/            心跳（Ticker + L0 短路）+ 做梦（Dreamer → 
 internal/subagent/         子代理：类型发现 + Runner（Spawn/SpawnDef，工具子集 + 根隔离）
 internal/workflow/         goja JS 编排脚本（agent/parallel/log 三原语）
 internal/race/             并行竞赛：worktree 生命周期 + 窗口扇出 + 裁判流水线（零内部依赖，Spawn/Complete 注入）
+internal/permrules/        权限规则三表（allow/ask/deny，CC 语法 glob 匹配 + bash 拆段，独立可测）
 internal/headless/         无界面单 turn 执行：Run/Execute + 事件流 + 工具层白名单守卫（-p 与 serve 共用）
 internal/serve/            HTTP API 雏形：/healthz + /v1/run（同步 JSON / SSE），装配经 Assemble 注入
 internal/channel/          IM 通道体系：Adapter 抽象 + Router（绑定路由/配对/常驻会话）+ team store（team.json）
@@ -71,7 +73,7 @@ internal/tui/              Bubble Tea 外壳（alt-screen + viewport）
   theme.go    DeepSeek 配色（lipgloss + glamour，AdaptiveColor 亮暗两套）
   markdown.go renderMarkdown(md, width)
   commands.go 命令注册表：/help、/ 补全菜单、分发三处同源（+ commands_test.go）
-  perms.go    加锁的权限状态 + decide() 裁决（+ perms_test.go）
+  perms.go    加锁的权限状态 + decide() 裁决 + resolveGate() 规则/模式合成（+ perms_test.go）
   logo.go     字符 logo + 欢迎卡（embed 两版 .txt）
   render.go   保留的纯函数 oneLine/compactJSON/interpretConfirmKey（+ render_test.go）
 ```

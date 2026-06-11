@@ -16,6 +16,7 @@ import (
 	"github.com/yzfly/tokencode/internal/config"
 	"github.com/yzfly/tokencode/internal/headless"
 	"github.com/yzfly/tokencode/internal/llm"
+	"github.com/yzfly/tokencode/internal/permrules"
 	"github.com/yzfly/tokencode/internal/subagent"
 	"github.com/yzfly/tokencode/internal/tools"
 	"github.com/yzfly/tokencode/internal/workflow"
@@ -90,10 +91,16 @@ func assembleHeadless(cfg config.Config, modelName, baseURLFlag string, maxToken
 	}
 
 	allow := headless.Allow(allowed, yolo)
+	// deny 表全局生效：白名单（或 -yolo）放行之前先查 deny（全局 config +
+	// 工作空间的 .tokencode/permissions.json）。坏规则警告进 stderr，不阻塞。
+	rules, ruleWarns := permrules.Load(cwd, cfg.Permissions)
+	for _, w := range ruleWarns {
+		fmt.Fprintln(os.Stderr, "warn: 权限规则:", w)
+	}
 	reg := tools.NewRegistry()
 	for _, t := range []tools.Tool{tools.Read(), tools.Write(), tools.Edit(), tools.Bash(),
 		tools.WebSearch(), tools.WebFetch()} {
-		reg.Add(headless.GateTool(t, allow))
+		reg.Add(headless.GateToolRules(t, allow, rules))
 	}
 	if root != "" {
 		reg.SetRoot(root)
@@ -113,8 +120,8 @@ func assembleHeadless(cfg config.Config, modelName, baseURLFlag string, maxToken
 		}
 		return c, t.Model, nil
 	}
-	reg.Add(headless.GateTool(subagent.NewTool(runner), allow))
-	reg.Add(headless.GateTool(workflow.NewTool(runner), allow))
+	reg.Add(headless.GateToolRules(subagent.NewTool(runner), allow, rules))
+	reg.Add(headless.GateToolRules(workflow.NewTool(runner), allow, rules))
 	return ag, tgt.Model, nil
 }
 

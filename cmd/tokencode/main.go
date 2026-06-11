@@ -17,6 +17,7 @@ import (
 	"github.com/yzfly/tokencode/internal/headless"
 	"github.com/yzfly/tokencode/internal/llm"
 	"github.com/yzfly/tokencode/internal/mcp"
+	"github.com/yzfly/tokencode/internal/permrules"
 	"github.com/yzfly/tokencode/internal/pulse"
 	"github.com/yzfly/tokencode/internal/race"
 	"github.com/yzfly/tokencode/internal/session"
@@ -148,6 +149,13 @@ func main() {
 	}
 	skills := skill.Discover(cwd)
 
+	// 权限规则三表：config 全局 + 项目级 .tokencode/permissions.json 合并。
+	// 坏规则只警告不阻塞（deny > ask > allow > 模式默认，见 internal/permrules）。
+	rules, ruleWarns := permrules.Load(cwd, cfg.Permissions)
+	for _, w := range ruleWarns {
+		fmt.Fprintln(os.Stderr, "warn: 权限规则:", w)
+	}
+
 	notice, store, err := setupSession(ag, tgt.Model, *cont, *resumeID, *noSession)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
@@ -231,6 +239,7 @@ func main() {
 		MCP:       mcpMgr,
 		Agents:    runner,
 		AutoJudge: makeAutoJudge(cfg, ag),
+		Rules:     rules,
 		Workspace: tools.WorkspaceRoot(),
 		Version:   version,
 		RunRace:   runRace,

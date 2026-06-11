@@ -222,3 +222,24 @@ func TestResolveBadAlias(t *testing.T) {
 		t.Fatal("expected error for alias pointing to unknown provider")
 	}
 }
+
+// TestLoadPermissions 验证 permissions 三表能从 config.json 解析出来。
+func TestLoadPermissions(t *testing.T) {
+	writeConfig(t, `{
+		"permissions": {
+			"allow": ["read", "bash(go test*)"],
+			"ask": ["bash(git push *)"],
+			"deny": ["bash(rm -rf *)"]
+		}
+	}`)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Permissions.Allow) != 2 || len(cfg.Permissions.Ask) != 1 || len(cfg.Permissions.Deny) != 1 {
+		t.Fatalf("permissions lists wrong: %+v", cfg.Permissions)
+	}
+	if cfg.Permissions.Deny[0] != "bash(rm -rf *)" {
+		t.Fatalf("deny[0] = %q", cfg.Permissions.Deny[0])
+	}
+}

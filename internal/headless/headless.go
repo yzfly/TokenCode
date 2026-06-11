@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/yzfly/tokencode/internal/agent"
+	"github.com/yzfly/tokencode/internal/permrules"
 	"github.com/yzfly/tokencode/internal/tools"
 )
 
@@ -37,15 +38,26 @@ func Allow(allowed []string, yolo bool) func(name string) bool {
 // GateTool 给工具包上 headless 守卫：裁决不过时不执行，返回错误
 // "rejected (headless)" 作为 tool_result 喂回模型，让它自行调整方案。
 func GateTool(t tools.Tool, allow func(name string) bool) tools.Tool {
-	return gateTool{Tool: t, allow: allow}
+	return GateToolRules(t, allow, nil)
+}
+
+// GateToolRules 在白名单之上叠加权限规则的 deny 表：deny 命中先于一切
+// （-yolo 也拦），白名单语义不变（ask/allow 表对无人值守入口无意义——
+// 没人可问、放行靠白名单显式声明）。rules 可为 nil（恒不命中）。
+func GateToolRules(t tools.Tool, allow func(name string) bool, rules *permrules.Rules) tools.Tool {
+	return gateTool{Tool: t, allow: allow, rules: rules}
 }
 
 type gateTool struct {
 	tools.Tool
 	allow func(string) bool
+	rules *permrules.Rules
 }
 
 func (g gateTool) Execute(ctx context.Context, input json.RawMessage) (string, error) {
+	if g.rules.Evaluate(g.Tool.Name(), input) == permrules.Deny {
+		return "", errors.New("rejected (permission deny rule)")
+	}
 	if !g.allow(g.Tool.Name()) {
 		return "", errors.New("rejected (headless)")
 	}
