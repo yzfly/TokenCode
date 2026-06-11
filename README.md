@@ -57,6 +57,27 @@ Shift+Tab 循环切换，或用 `/plan` `/review` `/auto` `/yolo`；`/exit` 或 
 | `-continue` | `false` | 继续当前目录最近一次会话 |
 | `-resume` | — | 按会话 id 恢复 |
 | `-no-session` | `false` | 本次会话不落盘 |
+| `-p` | — | headless：跑一个 turn 后退出（`-p "任务"`，或管道 `echo 任务 \| tokencode -p`） |
+| `-output` | `text` | headless 输出格式：`text` / `json` / `stream-json`（JSONL 事件流，仅 `-p` 下有效） |
+| `-allowed-tools` | `read,websearch,webfetch` | headless 工具白名单（逗号分隔）；白名单外直接拒绝，`-yolo` 全放行 |
+
+### Headless 与 HTTP API
+
+无人值守的两种用法，权限语义相同（白名单外的工具调用直接拒绝、喂回模型）：
+
+```bash
+# headless：脚本/CI 里跑一个 turn 即退出（成功 0、出错 1）
+tokencode -p "总结 README 的核心卖点" -output json
+git diff | tokencode -p -allowed-tools read   # 管道喂 prompt
+
+# HTTP API（v0 无鉴权，默认只绑回环）
+tokencode serve -addr 127.0.0.1:8787
+curl -s http://127.0.0.1:8787/v1/run -d '{"prompt":"列出当前目录结构","model":"可选"}'
+# SSE 流式（事件与 -output stream-json 同构，最后一条恒为 result）
+curl -N -H 'Accept: text/event-stream' http://127.0.0.1:8787/v1/run -d '{"prompt":"..."}'
+```
+
+每个请求独立 agent 实例（无共享历史），`-max-concurrent`（默认 8）限制同时在跑的 run。
 
 ### 模型与国内 Coding Plan 开箱即用
 

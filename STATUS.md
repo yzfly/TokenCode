@@ -33,6 +33,7 @@
 - Bubble Tea TUI（alt-screen + viewport）：glamour markdown 每条渲染一次进缓存、DeepSeek 蓝主题、亮/暗自适应、鼠标滚轮滚动、字符 logo + 欢迎卡、等待时 spinner。
 - 权限三模式：**plan**（只读）/ **review**（逐次 y/n/a 确认，默认）/ **yolo**（全放行）；Shift+Tab 循环或 `/plan` `/review` `/yolo` 切换。
 - 跑动中 Ctrl-C 打断当前轮、回提示符；非 tty（管道/重定向）自动退化为纯文本。
+- **Headless 与 HTTP API（SDK/通道/WebUI 的共同地基）**：`-p` 跑一个 turn 即退出（`-output text|json|stream-json`，stream-json 是 JSONL 事件流、最后一行恒为 result；成功 0 / 出错 1）；`tokencode serve` 起 HTTP API（`GET /healthz` + `POST /v1/run`，同步 JSON 或 SSE 流，默认仅回环、`-max-concurrent` 信号量限流、每请求独立 agent）。两条入口共用 `internal/headless` 的执行/事件/白名单语义：守卫包在工具层（白名单外喂回 "rejected (headless)"），子代理经共享注册表自动继承。
 
 ## 架构概览（各包职责）
 
@@ -51,6 +52,8 @@ internal/pulse/            心跳（Ticker + L0 短路）+ 做梦（Dreamer → 
 internal/subagent/         子代理：类型发现 + Runner（Spawn/SpawnDef，工具子集 + 根隔离）
 internal/workflow/         goja JS 编排脚本（agent/parallel/log 三原语）
 internal/race/             并行竞赛：worktree 生命周期 + 窗口扇出 + 裁判流水线（零内部依赖，Spawn/Complete 注入）
+internal/headless/         无界面单 turn 执行：Run/Execute + 事件流 + 工具层白名单守卫（-p 与 serve 共用）
+internal/serve/            HTTP API 雏形：/healthz + /v1/run（同步 JSON / SSE），装配经 Assemble 注入
 internal/tools/            Tool interface + Registry（可绑定 per-agent 根）+ read/write/edit/bash/websearch/webfetch
 internal/tui/              Bubble Tea 外壳（alt-screen + viewport）
   run.go      启动 program + Serve/Pulse goroutine + 非 tty 回退
@@ -87,7 +90,7 @@ go test ./...   # agent 循环 / llm 协议(httptest) / tools / tui 纯函数 + 
 go vet ./...
 ```
 
-常用 flag：`-model`、`-base-url`、`-max-tokens`（默认 4096）、`-yolo`（初始 yolo 模式）、`-theme auto|light|dark`、`-heartbeat 30m`（心跳，默认关闭）、`-continue`（继续最近会话）、`-resume <id>`、`-no-session`（不落盘）。
+常用 flag：`-model`、`-base-url`、`-max-tokens`（默认 4096）、`-yolo`（初始 yolo 模式）、`-theme auto|light|dark`、`-heartbeat 30m`（心跳，默认关闭）、`-continue`（继续最近会话）、`-resume <id>`、`-no-session`（不落盘）、`-p`（headless 单 turn）、`-output text|json|stream-json`、`-allowed-tools`（headless 白名单）。
 
 **依赖**：阶段 0 是零第三方依赖；阶段 1 引入了 charmbracelet 那套（bubbletea / bubbles / glamour / lipgloss）+ `golang.org/x/term` 及一长串间接依赖。`go.mod` 现在有 require。这是为 TUI 观感有意识付的账。
 

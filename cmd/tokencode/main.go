@@ -14,6 +14,7 @@ import (
 
 	"github.com/yzfly/tokencode/internal/agent"
 	"github.com/yzfly/tokencode/internal/config"
+	"github.com/yzfly/tokencode/internal/headless"
 	"github.com/yzfly/tokencode/internal/llm"
 	"github.com/yzfly/tokencode/internal/mcp"
 	"github.com/yzfly/tokencode/internal/pulse"
@@ -45,7 +46,12 @@ func main() {
 	resumeID := flag.String("resume", "", "按会话 id 恢复（tokencode -resume <id>）")
 	noSession := flag.Bool("no-session", false, "本次会话不落盘")
 	workspaceMode := flag.Bool("workspace", false, "工作空间隔离：文件工具只允许访问当前目录之内（含符号链接解析）")
-	flag.Parse()
+	prompt := flag.String("p", "", "headless：跑一个 turn 后退出；无值且 stdin 是管道时从 stdin 读 prompt")
+	outputFmt := flag.String("output", "text", "headless 输出格式：text|json|stream-json（仅 -p 下有效）")
+	allowedTools := flag.String("allowed-tools", strings.Join(headless.DefaultAllowed, ","),
+		"headless 工具白名单（逗号分隔；-yolo 全放行，其余工具调用直接拒绝）")
+	// 裸 `-p`（管道用法）改写成 `-p=` 再解析，等价于 flag.Parse()。
+	_ = flag.CommandLine.Parse(normalizeArgs(os.Args[1:]))
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -65,18 +71,6 @@ func main() {
 		modelName = llm.DefaultModel
 	}
 
-	tgt, err := cfg.Resolve(modelName)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
-		os.Exit(1)
-	}
-
-	client, effBaseURL, err := buildClient(tgt, *baseURL)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
-		os.Exit(1)
-	}
-
 	cwd, err := os.Getwd()
 	if err != nil {
 		cwd = "."
@@ -87,6 +81,41 @@ func main() {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
+	}
+
+	// headless（-p）：装配同一套 agent 但跳过 TUI/心跳/会话，跑一个 turn 即退出。
+	// 用 Visit 判断 flag 是否显式给出——`-p=` + 管道也是合法用法。
+	headlessMode := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "p" {
+			headlessMode = true
+		}
+	})
+	if headlessMode {
+		switch *outputFmt {
+		case "text", "json", "stream-json":
+		default:
+			fmt.Fprintf(os.Stderr, "error: -output 只支持 text|json|stream-json（收到 %q）\n", *outputFmt)
+			os.Exit(2)
+		}
+		p, err := resolveHeadlessPrompt(*prompt)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(2)
+		}
+		os.Exit(runHeadless(cfg, modelName, *baseURL, *maxTokens, p, *outputFmt, splitTools(*allowedTools), *yolo))
+	}
+
+	tgt, err := cfg.Resolve(modelName)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
+	}
+
+	client, effBaseURL, err := buildClient(tgt, *baseURL)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
 	}
 
 	reg := tools.NewRegistry(tools.Read(), tools.Write(), tools.Edit(), tools.Bash(),
