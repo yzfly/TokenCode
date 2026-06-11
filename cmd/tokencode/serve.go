@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/yzfly/tokencode/internal/a2a"
 	"github.com/yzfly/tokencode/internal/agent"
 	"github.com/yzfly/tokencode/internal/channel"
 	"github.com/yzfly/tokencode/internal/channel/dingtalk"
@@ -51,18 +52,25 @@ func cmdServe(args []string) int {
 		def = llm.DefaultModel
 	}
 
+	assemble := func(model string, allowed []string) (*agent.Agent, string, error) {
+		name := model
+		if name == "" {
+			name = def
+		}
+		return assembleHeadless(cfg, name, "", *maxTokens, allowed, false, "serve", "")
+	}
+	// WebUI（大盘/聊天/团队/模型）与 A2A（被其他 agent 发现/对话/触发）
+	// 都经 Mount 挂上同一个 mux。
+	ui := &webui.Server{Version: version, Team: channel.NewStore("")}
+	a2aSrv := &a2a.Server{Version: version, MaxConcurrent: *maxConc, Assemble: assemble}
 	srv := &serve.Server{
 		Version:       version,
 		MaxConcurrent: *maxConc,
-		Assemble: func(model string, allowed []string) (*agent.Agent, string, error) {
-			name := model
-			if name == "" {
-				name = def
-			}
-			return assembleHeadless(cfg, name, "", *maxTokens, allowed, false, "serve", "")
+		Assemble:      assemble,
+		Mount: func(mux *http.ServeMux) {
+			ui.Register(mux)
+			a2aSrv.Register(mux)
 		},
-		// WebUI（大盘/聊天/团队/模型）：与 IM 路由共用同一份 team.json。
-		Mount: (&webui.Server{Version: version, Team: channel.NewStore("")}).Register,
 	}
 	httpSrv := &http.Server{Addr: *addr, Handler: srv.Handler()}
 
@@ -101,6 +109,7 @@ func cmdServe(args []string) int {
 	errCh := make(chan error, 1)
 	go func() { errCh <- httpSrv.ListenAndServe() }()
 	fmt.Printf("tokencode serve · %s · GET /healthz · POST /v1/run（Accept: text/event-stream 走 SSE）· WebUI http://%s/ui · Ctrl-C 退出\n", *addr, *addr)
+	fmt.Printf("A2A 端点 http://%s/a2a · agent card http://%s/.well-known/agent-card.json\n", *addr, *addr)
 
 	select {
 	case err := <-errCh:

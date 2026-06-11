@@ -106,6 +106,20 @@ curl -N -H 'Accept: text/event-stream' http://127.0.0.1:8787/v1/run -d '{"prompt
 
 <!-- TODO: WebUI 大盘截图 -->
 
+#### A2A（被其他 agent 调用）
+
+serve 同时暴露 [A2A 协议](https://a2a-protocol.org) v1 最小子集，让 TokenCode 可以被任何 A2A 客户端发现、对话、触发——agent card 在 `http://127.0.0.1:8787/.well-known/agent-card.json`，JSON-RPC 端点 `POST /a2a`（v1 PascalCase 方法 + 0.x 别名 `message/send` 等一并接受）：
+
+```bash
+# 发现：拿 card（接口 url 随访问 Host 自动推导）
+curl -s http://127.0.0.1:8787/.well-known/agent-card.json
+# 对话：SendMessage 阻塞跑完回 ROLE_AGENT message（带 taskId，可再 GetTask 查终态）
+curl -s http://127.0.0.1:8787/a2a -d '{"jsonrpc":"2.0","id":1,"method":"SendMessage",
+  "params":{"message":{"messageId":"m1","role":"ROLE_USER","parts":[{"text":"总结这个仓库"}]}}}'
+```
+
+流式用 `SendStreamingMessage`（SSE：statusUpdate WORKING → artifactUpdate 增量 → 终态 statusUpdate）；`GetTask`/`CancelTask` 查询与取消。card 声明了 Bearer scheme 但 v0 不校验（边界同 serve：仅回环）。
+
 
 
 ### 团队模式（IM 接入，飞书/钉钉）
