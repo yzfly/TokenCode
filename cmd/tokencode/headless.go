@@ -15,6 +15,7 @@ import (
 	"github.com/yzfly/tokencode/internal/agent"
 	"github.com/yzfly/tokencode/internal/config"
 	"github.com/yzfly/tokencode/internal/headless"
+	"github.com/yzfly/tokencode/internal/hooks"
 	"github.com/yzfly/tokencode/internal/llm"
 	"github.com/yzfly/tokencode/internal/subagent"
 	"github.com/yzfly/tokencode/internal/tools"
@@ -100,6 +101,16 @@ func assembleHeadless(cfg config.Config, modelName, baseURLFlag string, maxToken
 	}
 	ag := agent.New(client, reg, tgt.Model, maxTokens)
 	ag.SetUsageSource(usageSource)
+
+	// hooks 同样生效（headless/serve/channel 都经这里装配）：提示走 stderr，
+	// 不碰 stdout 的机器可读输出契约。每次装配即一个新会话，SessionStart 在此触发。
+	if hr, err := hooks.Load(cfg.Hooks, cwd); err != nil {
+		fmt.Fprintln(os.Stderr, "warn:", err)
+	} else if hr != nil {
+		hr.Notify = func(s string) { fmt.Fprintln(os.Stderr, "hook:", s) }
+		ag.SetHooks(hr)
+		hr.OnSessionStart()
+	}
 
 	runner := subagent.NewRunner(ag.Client, reg, maxTokens, subagent.Discover(cwd))
 	runner.Resolve = func(name string) (llm.LLM, string, error) {

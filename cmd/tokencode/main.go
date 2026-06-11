@@ -15,6 +15,7 @@ import (
 	"github.com/yzfly/tokencode/internal/agent"
 	"github.com/yzfly/tokencode/internal/config"
 	"github.com/yzfly/tokencode/internal/headless"
+	"github.com/yzfly/tokencode/internal/hooks"
 	"github.com/yzfly/tokencode/internal/llm"
 	"github.com/yzfly/tokencode/internal/mcp"
 	"github.com/yzfly/tokencode/internal/pulse"
@@ -123,6 +124,14 @@ func main() {
 		tools.WebSearch(), tools.WebFetch())
 	ag := agent.New(client, reg, tgt.Model, *maxTokens)
 
+	// hooks：全局（config 顶层 "hooks"）+ 项目级（.tokencode/hooks.json）合并。
+	// 配置坏了只警告不挡启动；没配置时 hr 为 nil，所有事件点零开销。
+	hr, err := hooks.Load(cfg.Hooks, cwd)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "warn:", err)
+	}
+	ag.SetHooks(hr)
+
 	// 子代理与动态工作流：与主 agent 共享注册表、客户端（跟随 /model 热切换）。
 	runner := subagent.NewRunner(ag.Client, reg, *maxTokens, subagent.Discover(cwd))
 	runner.Resolve = func(name string) (llm.LLM, string, error) {
@@ -154,6 +163,22 @@ func main() {
 	}
 	if store != nil {
 		defer store.Close()
+	}
+
+	// SessionStart：装配完成后触发一次。此刻 TUI 还没接管屏幕，
+	// hook 的提示先收进开场 notice，进了 TUI 一并展示。
+	if hr != nil {
+		var hookNotes []string
+		hr.Notify = func(s string) { hookNotes = append(hookNotes, s) }
+		hr.OnSessionStart()
+		if len(hookNotes) > 0 {
+			msg := "hook · " + strings.Join(hookNotes, "\nhook · ")
+			if notice == "" {
+				notice = msg
+			} else {
+				notice += "\n" + msg
+			}
+		}
 	}
 
 	events := make(chan agent.Event, 1)
@@ -226,6 +251,7 @@ func main() {
 		Idle:      idle,
 		Pulse:     pl,
 		Cfg:       cfg,
+		Hooks:     hr,
 		Skills:    skills,
 		MCP:       mcpMgr,
 		Agents:    runner,

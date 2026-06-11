@@ -14,6 +14,7 @@ import (
 
 	"github.com/yzfly/tokencode/internal/agent"
 	"github.com/yzfly/tokencode/internal/config"
+	"github.com/yzfly/tokencode/internal/hooks"
 	"github.com/yzfly/tokencode/internal/mcp"
 	"github.com/yzfly/tokencode/internal/pulse"
 	"github.com/yzfly/tokencode/internal/race"
@@ -33,6 +34,7 @@ type Options struct {
 	Pulse   *pulse.Pulse       // 心跳源，nil=关闭；仅 tty 模式生效
 
 	Cfg         config.Config    // /model 列表
+	Hooks       *hooks.Runner    // hooks 运行器，可为 nil；外壳接管 Notify 让提示走 note
 	Skills      []skill.Skill    // /skills 与 /技能名
 	MCP         *mcp.Manager     // /mcp 状态，可为 nil
 	Agents      *subagent.Runner // 子代理运行器，可为 nil；外壳启动时注入 UI 工厂
@@ -95,6 +97,11 @@ func Run(ag *agent.Agent, opts Options) error {
 	}
 	p = tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
+	// hook 提示（systemMessage/阻断/警告）走 note 上屏（线程安全：prog.Send）。
+	if opts.Hooks != nil {
+		opts.Hooks.Notify = func(s string) { p.Send(noteMsg{text: "hook · " + s}) }
+	}
+
 	br := &bridge{prog: p, perms: perms, judge: opts.AutoJudge}
 	ui := br.UI()
 
@@ -123,6 +130,9 @@ func runPlain(ag *agent.Agent, opts Options) error {
 	fmt.Printf("TokenCode · model=%s · base=%s\n", modelName, baseURL)
 	if opts.Notice != "" {
 		fmt.Println(opts.Notice)
+	}
+	if opts.Hooks != nil {
+		opts.Hooks.Notify = func(s string) { fmt.Println("hook ·", s) }
 	}
 	// 子代理在 plain 模式下沿用同一条非交互策略：只读放行，其余看 -yolo。
 	if opts.Agents != nil {
