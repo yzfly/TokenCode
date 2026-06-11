@@ -19,6 +19,7 @@ import (
 	"github.com/yzfly/tokencode/internal/headless"
 	"github.com/yzfly/tokencode/internal/llm"
 	"github.com/yzfly/tokencode/internal/serve"
+	"github.com/yzfly/tokencode/internal/webui"
 )
 
 // cmdServe 实现 `tokencode serve`：HTTP API 雏形。默认只绑回环（v0 无鉴权，
@@ -60,6 +61,8 @@ func cmdServe(args []string) int {
 			}
 			return assembleHeadless(cfg, name, "", *maxTokens, allowed, false, "serve", "")
 		},
+		// WebUI（大盘/聊天/团队/模型）：与 IM 路由共用同一份 team.json。
+		Mount: (&webui.Server{Version: version, Team: channel.NewStore("")}).Register,
 	}
 	httpSrv := &http.Server{Addr: *addr, Handler: srv.Handler()}
 
@@ -97,7 +100,7 @@ func cmdServe(args []string) int {
 	}
 	errCh := make(chan error, 1)
 	go func() { errCh <- httpSrv.ListenAndServe() }()
-	fmt.Printf("tokencode serve · %s · GET /healthz · POST /v1/run（Accept: text/event-stream 走 SSE）· Ctrl-C 退出\n", *addr)
+	fmt.Printf("tokencode serve · %s · GET /healthz · POST /v1/run（Accept: text/event-stream 走 SSE）· WebUI http://%s/ui · Ctrl-C 退出\n", *addr, *addr)
 
 	select {
 	case err := <-errCh:

@@ -240,3 +240,17 @@ func TestConcurrencySemaphoreNoDeadlock(t *testing.T) {
 		t.Errorf("request failed: %v", err)
 	}
 }
+
+// TestMount 验证 Handler 会回调 Mount 注册额外路由（WebUI 的注入点）。
+func TestMount(t *testing.T) {
+	s := &Server{Mount: func(mux *http.ServeMux) {
+		mux.HandleFunc("GET /ui", func(w http.ResponseWriter, r *http.Request) {
+			fmt.Fprint(w, "webui")
+		})
+	}}
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/ui", nil))
+	if rec.Code != http.StatusOK || rec.Body.String() != "webui" {
+		t.Fatalf("Mount 路由未生效: %d %q", rec.Code, rec.Body.String())
+	}
+}

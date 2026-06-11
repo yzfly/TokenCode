@@ -24,6 +24,9 @@ type Server struct {
 	// Assemble 为一次请求装配独立 agent：model 空=默认模型，返回解析后的
 	// 实际 model id。错误一律视为请求问题（未知 model / 缺 key）→ 400。
 	Assemble func(model string, allowed []string) (*agent.Agent, string, error)
+	// Mount 注册额外路由（WebUI 等）：Handler 建好 mux 后回调一次。
+	// 用回调注入而非直接 import——serve 保持不依赖 webui/catalog/channel。
+	Mount func(mux *http.ServeMux)
 
 	once sync.Once
 	sem  chan struct{} // 计数信号量：限制同时在跑的 run
@@ -48,6 +51,9 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("POST /v1/run", s.handleRun)
+	if s.Mount != nil {
+		s.Mount(mux)
+	}
 	return mux
 }
 

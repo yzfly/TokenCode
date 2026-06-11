@@ -1,0 +1,25 @@
+{{define "models"}}<!doctype html>
+<html lang="zh">
+<head><title>模型 · tokencode</title>{{template "head"}}</head>
+<body>
+{{template "nav" .}}
+<main>
+  <h1>模型目录与凭据状态（只读）</h1>
+  <p class="empty">内置 models.dev 快照 · 凭据来源：env 环境变量 / <code>tokencode auth login</code> 写入的 auth.json。
+  用法：<code>tokencode -model &lt;provider-id&gt;/&lt;model-id&gt;</code>。</p>
+  <table><thead><tr>
+    <th>provider</th><th>名称</th><th>协议</th><th>端点</th><th class="r">模型数</th><th>凭据</th>
+  </tr></thead><tbody>
+  {{range .Rows}}
+    <tr>
+      <td><code>{{.ID}}</code></td><td>{{.Name}}</td><td>{{.Protocol}}</td>
+      <td>{{if .BaseURL}}{{.BaseURL}}{{else}}协议默认{{end}}</td>
+      <td class="r">{{.Models}}</td>
+      <td>{{if .HasCred}}<b>{{.Cred}}</b>{{else}}{{.Cred}}{{end}}</td>
+    </tr>
+  {{end}}
+  </tbody></table>
+</main>
+</body>
+</html>
+{{end}}
