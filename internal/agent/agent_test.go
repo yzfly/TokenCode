@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/yzfly/tokencode/internal/hooks"
 	"github.com/yzfly/tokencode/internal/llm"
 	"github.com/yzfly/tokencode/internal/tools"
 )
@@ -187,6 +188,78 @@ func (noopTool) Description() string    { return "noop" }
 func (noopTool) Schema() map[string]any { return map[string]any{"type": "object"} }
 func (noopTool) Execute(ctx context.Context, _ json.RawMessage) (string, error) {
 	return "ok", nil
+}
+
+// TestPreToolUseHookBlocks 验证 hooks 接线：PreToolUse exit 2 阻断工具执行，
+// stderr 理由以 "blocked by PreToolUse hook: ..." 形式作为错误结果喂回模型。
+func TestPreToolUseHookBlocks(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "x.txt")
+	writeArgs, _ := json.Marshal(map[string]any{"path": p, "content": "nope"})
+
+	fake := &fakeLLM{responses: []llm.Response{
+		{ToolUses: []llm.ToolUse{{ID: "c1", Name: "write", Input: writeArgs}}, StopReason: "tool_use"},
+		{Text: "ok", StopReason: "end_turn"},
+	}}
+	a := New(fake, tools.NewRegistry(tools.Write()), "m", 100)
+
+	hr, err := hooks.Load(hooks.Config{
+		hooks.EventPreToolUse: {{Matcher: "write", Command: "echo guard says no >&2; exit 2"}},
+	}, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.SetHooks(hr)
+
+	if err := a.Run(context.Background(), "write x", UI{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(p); err == nil {
+		t.Fatal("hook 阻断后文件不该被写出")
+	}
+	var got llm.ToolResult
+	for _, m := range fake.lastReq.Messages {
+		for _, tr := range m.ToolResults {
+			got = tr
+		}
+	}
+	if !got.IsError || got.Content != "blocked by PreToolUse hook: guard says no" {
+		t.Fatalf("阻断结果不对：%+v", got)
+	}
+}
+
+// TestPostToolUseAndStopHooksFire 验证 PostToolUse 与 Stop 都在正确时机触发。
+func TestPostToolUseAndStopHooksFire(t *testing.T) {
+	dir := t.TempDir()
+	post := filepath.Join(dir, "post.log")
+	stop := filepath.Join(dir, "stop.log")
+	target := filepath.Join(dir, "y.txt")
+	writeArgs, _ := json.Marshal(map[string]any{"path": target, "content": "hi"})
+
+	fake := &fakeLLM{responses: []llm.Response{
+		{ToolUses: []llm.ToolUse{{ID: "c1", Name: "write", Input: writeArgs}}, StopReason: "tool_use"},
+		{Text: "done", StopReason: "end_turn"},
+	}}
+	a := New(fake, tools.NewRegistry(tools.Write()), "m", 100)
+
+	hr, err := hooks.Load(hooks.Config{
+		hooks.EventPostToolUse: {{Matcher: "write", Command: fmt.Sprintf(`printf '%%s\n' "$TOKENCODE_FILE" >> %q`, post)}},
+		hooks.EventStop:        {{Command: fmt.Sprintf("echo stopped >> %q", stop)}},
+	}, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.SetHooks(hr)
+
+	if err := a.Run(context.Background(), "write y", UI{}); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(post); err != nil || string(b) != target+"\n" {
+		t.Fatalf("PostToolUse 应带 TOKENCODE_FILE 触发一次：%q err=%v", b, err)
+	}
+	if b, err := os.ReadFile(stop); err != nil || string(b) != "stopped\n" {
+		t.Fatalf("Stop 应在 turn 收口触发一次：%q err=%v", b, err)
+	}
 }
 
 func TestSetSystemOverride(t *testing.T) {

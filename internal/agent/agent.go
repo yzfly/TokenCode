@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/yzfly/tokencode/internal/hooks"
 	"github.com/yzfly/tokencode/internal/llm"
 	"github.com/yzfly/tokencode/internal/tools"
 	"github.com/yzfly/tokencode/internal/usage"
@@ -46,9 +47,10 @@ type Agent struct {
 	tools     *tools.Registry
 	model     string
 	maxTokens int
-	system    string // 自定义系统提示（子代理用）；空=默认 SystemPrompt()
-	maxCalls  int    // 单 turn 模型调用次数上限；0=不限（子代理防失控用）
-	usageSrc  string // 记账来源标签（usage.Record.Source）；空=默认 "user"
+	system    string        // 自定义系统提示（子代理用）；空=默认 SystemPrompt()
+	maxCalls  int           // 单 turn 模型调用次数上限；0=不限（子代理防失控用）
+	usageSrc  string        // 记账来源标签（usage.Record.Source）；空=默认 "user"
+	hooks     *hooks.Runner // 命令型 hooks；nil=未配置（零开销，Runner 方法 nil 安全）
 
 	mu          sync.Mutex
 	msgs        []llm.Message
@@ -99,6 +101,12 @@ func (a *Agent) SetSystem(s string) {
 // SetMaxCalls 限制单 turn 的模型调用次数（0=不限）。子代理用它防失控循环。
 func (a *Agent) SetMaxCalls(n int) {
 	a.maxCalls = n
+}
+
+// SetHooks 注入 hooks 运行器（装配时调用一次；nil 安全——不设或设 nil 都零开销）。
+// 只挂在主 agent 上：子代理各自 New、不继承 hooks。
+func (a *Agent) SetHooks(r *hooks.Runner) {
+	a.hooks = r
 }
 
 // SetUsageSource 设置记账来源标签（如 "subagent:racer#1"、"headless"）。
@@ -277,7 +285,8 @@ func (a *Agent) runTurn(ctx context.Context, userInput string, ui UI) error {
 		}
 
 		if len(resp.ToolUses) == 0 {
-			return nil // end turn
+			a.hooks.OnStop() // Stop：模型不再要工具，turn 正常收口
+			return nil       // end turn
 		}
 
 		// 并行安全的工具（子代理）并发执行，其余按模型给出的顺序串行；
@@ -327,17 +336,27 @@ func (a *Agent) toolDefs() []llm.Tool {
 }
 
 func (a *Agent) execTool(ctx context.Context, tu llm.ToolUse, ui UI) (string, bool) {
+	// PreToolUse hook 先于权限确认：hook 阻断时省掉一次人工/auto 裁决。
+	if block, reason := a.hooks.OnPreTool(tu.Name, tu.Input); block {
+		msg := "blocked by PreToolUse hook: " + reason
+		if ui.OnToolResult != nil {
+			ui.OnToolResult(tu.Name, msg, true)
+		}
+		return msg, true
+	}
 	if ui.OnToolCall != nil && !ui.OnToolCall(tu.Name, tu.Input) {
 		return "Tool call rejected by the user.", true
 	}
 	out, err := a.tools.Execute(ctx, tu.Name, tu.Input)
 	if err != nil {
 		msg := fmt.Sprintf("Error: %v", err)
+		a.hooks.OnPostTool(tu.Name, tu.Input, msg, true)
 		if ui.OnToolResult != nil {
 			ui.OnToolResult(tu.Name, msg, true)
 		}
 		return msg, true
 	}
+	a.hooks.OnPostTool(tu.Name, tu.Input, out, false)
 	if ui.OnToolResult != nil {
 		ui.OnToolResult(tu.Name, out, false)
 	}

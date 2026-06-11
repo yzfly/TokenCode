@@ -14,6 +14,7 @@ import (
 
 	"github.com/yzfly/tokencode/internal/auth"
 	"github.com/yzfly/tokencode/internal/catalog"
+	"github.com/yzfly/tokencode/internal/hooks"
 	"github.com/yzfly/tokencode/internal/mcp"
 	"github.com/yzfly/tokencode/internal/permrules"
 )
@@ -55,6 +56,7 @@ type Config struct {
 	Race         RaceConfig                  `json:"race"`       // 并行竞赛模式（/race）
 	Channels     ChannelsConfig              `json:"channels"`   // IM 通道（团队模式，serve 时启用）
 	Compact      CompactConfig               `json:"compact"`    // 上下文自动压缩（/compact）
+	Hooks        hooks.Config                `json:"hooks"`      // 命令型 hooks（与项目级 .tokencode/hooks.json 合并，项目优先）
 
 	// Permissions 是全局权限规则三表（allow/ask/deny，CC 语法）。与项目级
 	// .tokencode/permissions.json 合并后生效，见 internal/permrules。
