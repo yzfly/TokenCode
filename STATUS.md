@@ -27,6 +27,8 @@
 - **Skills（M3 lite）**：扫 `.tokencode/skills` 并兼容 `.claude/skills`、`.agents/skills`，启动只读 frontmatter，`/技能名 [参数]` 调用时才读正文（渐进披露）；$ARGUMENTS 替换对齐 Claude Code 语义。
 - **MCP（最小 stdio client）**：config.json 的 `"mcp"` 字段配置 server，后台连接绝不阻塞启动；工具以 `mcp__server__tool` 注册进 registry，对 agent 与内置工具零差别；`/mcp` 看状态、`/mcp reconnect <名>` 重连；退出硬 kill 子进程。
 - **Hooks（CC 对标的命令型子集）**：`PreToolUse` / `PostToolUse` / `SessionStart` / `Stop` 四事件——config 顶层 `"hooks"` 与项目 `.tokencode/hooks.json` 合并（项目优先），matcher 是工具名整名正则；命令经 `sh -c` 跑、stdin 喂 JSON 事件载荷、env 给 `TOKENCODE_EVENT/TOOL/FILE`；PreToolUse `exit 2` 阻断该次工具调用（stderr 作为喂回模型的理由），其余非零只警告，stdout 的 `{"systemMessage":...}` 透传为用户提示，单 hook 30s 超时非阻断；TUI/headless/serve/IM 通道全路径生效，无配置零开销（nil runner 快速路径）。
+- **文件检查点与回滚（`/rewind`，CC checkpointing 对标）**：`write`/`edit` 写盘前经 Registry 级钩子把原内容（或「不存在」标记）快照进 `.tokencode/checkpoints/<会话>/`（影子文件 + JSONL manifest，损坏行跳过），按用户 turn 分组；`/rewind` 列检查点、`/rewind <n>` 把该点及之后改动按逆序恢复（新建文件删除）、`/rewind clear` 清空；退出不删（7 天后启动时自动清理）。只回滚文件不回滚对话；bash 改动拦不到（已知盲区）；racer 注册表带 worktree 隔离、天然不触发主仓库检查点。
+- **worktree 集成（`-w <name>`，CC 对标）**：启动时在当前 git 仓库下 `git worktree add -b tokencode/wt-<name> .tokencode/worktrees/<name> HEAD`（同名复用、分支残留重挂载），整个进程 chdir 进去再装配——工具、会话、子代理天然都落在隔离 worktree；状态栏显示 `wt:<name>`；退出不自动删（手动 `git worktree remove`）。
 - **流式输出**：三协议都实现 `llm.Streamer`（SSE），TUI 实时显示生成中的文本尾巴（完成后整段 markdown 渲染替换），plain 模式逐段打印；codec 不支持或外壳不要增量时自动回落非流式。
 - **token 用量记账（WebUI 大盘的地基）**：每次模型调用（用户/子代理/racer/裁判/心跳/梦/headless/serve 全路径）把 in/out/cache 用量追加进 `$XDG_DATA_HOME/tokencode/usage/YYYY-MM.jsonl`（append-only、损坏行跳过、失败静默不影响对话）；三协议含流式都解析 usage（含缓存读写）；`/usage`（别名 `/cost` `/stats`）看本月/今日合计与按模型/来源排行，聚合经 `usage.Summarize` 供将来 WebUI 共用。
 - **会话持久化**：每拍结束把新留下的历史追加进 `$XDG_DATA_HOME/tokencode/sessions/YYYY/MM/DD/<id>.jsonl`（append-only，崩溃安全，半行损坏自动跳过）；`-continue` 继续当前目录最近会话、`-resume <id>` 指定恢复、`-no-session` 关闭；心跳空转拍剔除后不落盘（水位线机制）。
@@ -103,7 +105,7 @@ go test ./...   # agent 循环 / llm 协议(httptest) / tools / tui 纯函数 + 
 go vet ./...
 ```
 
-常用 flag：`-model`、`-base-url`、`-max-tokens`（默认 4096）、`-yolo`（初始 yolo 模式）、`-theme auto|light|dark`、`-heartbeat 30m`（心跳，默认关闭）、`-continue`（继续最近会话）、`-resume <id>`、`-no-session`（不落盘）、`-p`（headless 单 turn）、`-output text|json|stream-json`、`-allowed-tools`（headless 白名单）。
+常用 flag：`-model`、`-base-url`、`-max-tokens`（默认 4096）、`-yolo`（初始 yolo 模式）、`-theme auto|light|dark`、`-heartbeat 30m`（心跳，默认关闭）、`-continue`（继续最近会话）、`-resume <id>`、`-no-session`（不落盘）、`-p`（headless 单 turn）、`-output text|json|stream-json`、`-allowed-tools`（headless 白名单）、`-w <name>`（隔离 git worktree 里干活）。
 
 **依赖**：阶段 0 是零第三方依赖；阶段 1 引入了 charmbracelet 那套（bubbletea / bubbles / glamour / lipgloss）+ `golang.org/x/term` 及一长串间接依赖。`go.mod` 现在有 require。这是为 TUI 观感有意识付的账。
 
@@ -115,6 +117,7 @@ go vet ./...
 - **做梦 v1 用主模型**：`DreamModel` 便宜档配置留位未接。
 - **plain（非 tty）模式心跳不生效**：runPlain 同步调 Run，与 actor 并行会破坏单写者不变量；plain 模式也没有 `/race`。
 - **race v1 的取舍**：racer 在自己 worktree 内**自动放行全部工具（含 bash）**——文件工具有根隔离硬约束，bash 只有 cwd 约束没有沙箱；全员跑完才裁判（无提前终止）；无预算/花费建模；裁判单评委（无投票）。
+- **`/rewind` 只盖 write/edit**：bash 命令造成的文件改动没有写盘前拦截点，不进检查点；回滚也不回滚对话历史（模型仍记得后面的事）。
 - **websearch 看引擎脸色**：DDG 对部分 IP 丢 202 反爬挑战（已自动回退 Mojeek）；解析靠正则，引擎改版需要跟进。
 - **IM 通道 v0 的取舍**：会话历史驻 serve 进程内存（重启清零、不落 session JSONL）；换绑/改白名单对已创建的内存会话不生效（下一条消息仍用旧装配，重启后生效）；在跑时新消息直接回「稍候」不排队；进度只有「收到」一句，工具调用不逐条转发。
 - **活体冒烟与 pty 手动冒烟**未逐项留痕；TUI 胶水层（Bubble Tea model、glamour、bridge）无自动化测试覆盖，诚实标注。

@@ -122,6 +122,10 @@ func (r *Runner) SpawnDef(ctx context.Context, def Def, prompt string, opts Spaw
 	reg := r.subRegistry(def.Tools)
 	if opts.Root != "" {
 		reg.SetRoot(opts.Root)
+	} else {
+		// 在主工作区写文件的子代理继承检查点钩子；带 Root 的（如竞赛
+		// racer）有 worktree 隔离，不需要也不该触发主仓库的检查点。
+		reg.SetCheckpointer(r.Tools.Checkpointer())
 	}
 	sub := agent.New(client, reg, model, r.MaxTokens)
 	sub.SetSystem(subSystem(def, opts.Root))

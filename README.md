@@ -43,7 +43,19 @@ go run ./cmd/tokencode
 权限四模式：**plan**（只读）/ **review**（逐次 y/n/a 确认，默认）/ **auto**（小模型按规则自动裁决）/ **yolo**（全放行）。
 Shift+Tab 循环切换，或用 `/plan` `/review` `/auto` `/yolo`；`/exit` 或 Ctrl-D 退出，跑动中 Ctrl-C 打断当前轮。模式之上还可叠加声明式的[权限规则三表](#权限规则allow--ask--deny)（deny/ask/allow，团队治理用）。
 
-输入 `/` 弹出命令补全菜单：`/help` 全部命令与快捷键、`/race` 并行竞赛、`/model` 查看与热切换模型、`/agents` 子代理类型（兼容 `.claude/agents`）、`/skills` 技能列表（`/技能名 [参数]` 调用，兼容 `.claude/skills`）、`/mcp` MCP server 状态与重连、`/usage`（别名 `/cost` `/stats`）本月与今日 token 用量统计（账本 JSONL 按月落在数据目录，WebUI 大盘同源）、`/context` 上下文用量（估算 tokens、消息占比、距自动压缩的余量）、`/compact [侧重点]` 把旧历史压缩成结构化摘要（保留最近 2 轮；估算超过 `compact.auto_threshold`（默认 80000，0=关闭）时 turn 前自动压缩）。`! <命令>` 直通 shell。
+输入 `/` 弹出命令补全菜单：`/help` 全部命令与快捷键、`/race` 并行竞赛、`/model` 查看与热切换模型、`/agents` 子代理类型（兼容 `.claude/agents`）、`/skills` 技能列表（`/技能名 [参数]` 调用，兼容 `.claude/skills`）、`/mcp` MCP server 状态与重连、`/usage`（别名 `/cost` `/stats`）本月与今日 token 用量统计（账本 JSONL 按月落在数据目录，WebUI 大盘同源）、`/context` 上下文用量（估算 tokens、消息占比、距自动压缩的余量）、`/compact [侧重点]` 把旧历史压缩成结构化摘要（保留最近 2 轮；估算超过 `compact.auto_threshold`（默认 80000，0=关闭）时 turn 前自动压缩）、`/rewind` 文件检查点回滚（见下）。`! <命令>` 直通 shell。
+
+### `/rewind`：文件检查点回滚
+
+`write`/`edit` 每次改文件前自动把原内容快照进 `.tokencode/checkpoints/`（影子文件 + JSONL manifest，按用户 turn 分组）。改坏了不用翻 git：
+
+```
+/rewind        # 列出本会话检查点（时间、工具、文件数）
+/rewind 2      # 回滚到检查点 #2 拍下时的状态（该点及之后的改动按逆序撤销，新建文件删除）
+/rewind clear  # 清空本会话检查点
+```
+
+边界写清楚：**只回滚文件，不回滚对话历史**（模型仍记得后面的事，必要时配合 `/compact`）；**bash 命令造成的改动拦不到**（已知盲区，bash 是任意进程，没有写盘前拦截点）；`/race` racer 在各自 worktree 里跑，不触发主仓库检查点。检查点退出不删（留着翻旧账），7 天前的旧会话目录启动时自动清理。
 
 ### 常用 flag
 
@@ -57,6 +69,7 @@ Shift+Tab 循环切换，或用 `/plan` `/review` `/auto` `/yolo`；`/exit` 或 
 | `-continue` | `false` | 继续当前目录最近一次会话 |
 | `-resume` | — | 按会话 id 恢复 |
 | `-no-session` | `false` | 本次会话不落盘 |
+| `-w` | — | 在隔离 git worktree 里干活：`<repo>/.tokencode/worktrees/<name>`（分支 `tokencode/wt-<name>`，基于 HEAD；同名复用；非 git 仓库报错）。退出**不**自动删，验收后手动 `git worktree remove` 清理；状态栏显示 `wt:<name>` 标记 |
 | `-p` | — | headless：跑一个 turn 后退出（`-p "任务"`，或管道 `echo 任务 \| tokencode -p`） |
 | `-output` | `text` | headless 输出格式：`text` / `json` / `stream-json`（JSONL 事件流，仅 `-p` 下有效） |
 | `-allowed-tools` | `read,websearch,webfetch` | headless 工具白名单（逗号分隔）；白名单外直接拒绝，`-yolo` 全放行 |

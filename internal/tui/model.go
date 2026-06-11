@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/yzfly/tokencode/internal/agent"
+	"github.com/yzfly/tokencode/internal/checkpoint"
 	"github.com/yzfly/tokencode/internal/config"
 	"github.com/yzfly/tokencode/internal/mcp"
 	"github.com/yzfly/tokencode/internal/pulse"
@@ -86,13 +87,15 @@ type model struct {
 	modelName string
 	baseURL   string
 
-	agent       *agent.Agent   // /compact、/context 直接查改历史；可为 nil（测试）
-	compacting  bool           // /compact 进行中（输入锁定、指示行显示）
-	cfg         config.Config  // /model 列表用
-	skills      []skill.Skill  // /skills 列表与 /技能名 调用
-	mcp         *mcp.Manager   // /mcp 状态，可为 nil
-	agentDefs   []subagent.Def // /agents 列表
-	workspace   string         // 工作空间隔离根；空=未开启
+	agent       *agent.Agent             // /compact、/context 直接查改历史；可为 nil（测试）
+	compacting  bool                     // /compact 进行中（输入锁定、指示行显示）
+	cfg         config.Config            // /model 列表用
+	skills      []skill.Skill            // /skills 列表与 /技能名 调用
+	mcp         *mcp.Manager             // /mcp 状态，可为 nil
+	agentDefs   []subagent.Def           // /agents 列表
+	workspace   string                   // 工作空间隔离根；空=未开启
+	worktree    string                   // -w 的 worktree 名；空=未开启
+	checkpoint  *checkpoint.Checkpointer // 文件检查点（/rewind）；可为 nil
 	switchModel func(name string) (model, baseURL string, err error)
 	version     string
 
@@ -519,6 +522,9 @@ func (m model) setMode(name string) (tea.Model, tea.Cmd) {
 
 func (m model) sendCmd(text string) tea.Cmd {
 	return func() tea.Msg {
+		if m.checkpoint != nil {
+			m.checkpoint.BeginTurn() // 检查点按用户 turn 分组
+		}
 		m.events <- agent.Event{Source: agent.SourceUser, Text: text}
 		return nil
 	}
@@ -703,6 +709,9 @@ func (m model) footerView() string {
 	status := modeBadge(m.perms.current())
 	if m.workspace != "" {
 		status += " " + planBadge.Render("ws")
+	}
+	if m.worktree != "" {
+		status += " " + planBadge.Render("wt:"+m.worktree)
 	}
 	status += " " + hintStyle.Render(m.statusLine())
 

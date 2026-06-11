@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/yzfly/tokencode/internal/agent"
+	"github.com/yzfly/tokencode/internal/checkpoint"
 	"github.com/yzfly/tokencode/internal/config"
 	"github.com/yzfly/tokencode/internal/headless"
 	"github.com/yzfly/tokencode/internal/hooks"
@@ -49,6 +51,7 @@ func main() {
 	resumeID := flag.String("resume", "", "按会话 id 恢复（tokencode -resume <id>）")
 	noSession := flag.Bool("no-session", false, "本次会话不落盘")
 	workspaceMode := flag.Bool("workspace", false, "工作空间隔离：文件工具只允许访问当前目录之内（含符号链接解析）")
+	wtName := flag.String("w", "", "在 git worktree 里干活：<repo>/.tokencode/worktrees/<name>（分支 tokencode/wt-<name>，同名复用；退出不自动删）")
 	prompt := flag.String("p", "", "headless：跑一个 turn 后退出；无值且 stdin 是管道时从 stdin 读 prompt")
 	outputFmt := flag.String("output", "text", "headless 输出格式：text|json|stream-json（仅 -p 下有效）")
 	allowedTools := flag.String("allowed-tools", strings.Join(headless.DefaultAllowed, ","),
@@ -72,6 +75,19 @@ func main() {
 	}
 	if modelName == "" {
 		modelName = llm.DefaultModel
+	}
+
+	// -w：确保 worktree 存在后整个进程 chdir 进去，后续装配（工具根、
+	// 会话、技能、子代理）天然都落在 worktree 里。非 git 仓库直接报错退出。
+	if *wtName != "" {
+		dir, err := ensureWorktree(".", *wtName)
+		if err == nil {
+			err = os.Chdir(dir)
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
 	}
 
 	cwd, err := os.Getwd()
@@ -123,6 +139,14 @@ func main() {
 
 	reg := tools.NewRegistry(tools.Read(), tools.Write(), tools.Edit(), tools.Bash(),
 		tools.WebSearch(), tools.WebFetch())
+
+	// 文件检查点（/rewind）：write/edit 写盘前快照原内容。启动时顺手清理
+	// 7 天前的旧会话目录；本会话目录退出不删，留给用户翻旧账。
+	ckBase := filepath.Join(cwd, ".tokencode", "checkpoints")
+	checkpoint.CleanOld(ckBase, 7*24*time.Hour)
+	ck := checkpoint.New(ckBase)
+	reg.SetCheckpointer(ck.Snapshot)
+
 	ag := agent.New(client, reg, tgt.Model, *maxTokens)
 	ag.SetAutoCompact(cfg.Compact.Threshold())
 
@@ -251,24 +275,26 @@ func main() {
 	}
 
 	err = tui.Run(ag, tui.Options{
-		Model:     tgt.Model,
-		BaseURL:   effBaseURL,
-		Theme:     *theme,
-		Yolo:      *yolo,
-		Notice:    notice,
-		Events:    events,
-		Idle:      idle,
-		Pulse:     pl,
-		Cfg:       cfg,
-		Hooks:     hr,
-		Skills:    skills,
-		MCP:       mcpMgr,
-		Agents:    runner,
-		AutoJudge: makeAutoJudge(cfg, ag),
-		Rules:     rules,
-		Workspace: tools.WorkspaceRoot(),
-		Version:   version,
-		RunRace:   runRace,
+		Model:      tgt.Model,
+		BaseURL:    effBaseURL,
+		Theme:      *theme,
+		Yolo:       *yolo,
+		Notice:     notice,
+		Events:     events,
+		Idle:       idle,
+		Pulse:      pl,
+		Cfg:        cfg,
+		Hooks:      hr,
+		Skills:     skills,
+		MCP:        mcpMgr,
+		Agents:     runner,
+		AutoJudge:  makeAutoJudge(cfg, ag),
+		Rules:      rules,
+		Workspace:  tools.WorkspaceRoot(),
+		Worktree:   *wtName,
+		Checkpoint: ck,
+		Version:    version,
+		RunRace:    runRace,
 		SwitchModel: func(name string) (string, string, error) {
 			t, err := cfg.Resolve(name)
 			if err != nil {
