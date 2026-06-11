@@ -29,6 +29,8 @@ type UI struct {
 	// OnThinking 在每次调用模型前后触发（true=开始等待，false=结束）。
 	// 供外壳显示/隐藏 spinner。可为 nil。
 	OnThinking func(active bool)
+	// OnNote 是 agent 主动给用户的一句提示（如自动压缩通知），不进历史。
+	OnNote func(text string)
 	// OnTurnStart 在 Serve 的每拍开始时调用，携带来源与该拍的取消函数。
 	// 外壳据此决定是否切换输入状态、持有 cancel 以支持打断。仅 Serve 路径触发。
 	OnTurnStart func(source EventSource, cancel context.CancelFunc)
@@ -48,9 +50,11 @@ type Agent struct {
 	maxCalls  int    // 单 turn 模型调用次数上限；0=不限（子代理防失控用）
 	usageSrc  string // 记账来源标签（usage.Record.Source）；空=默认 "user"
 
-	mu      sync.Mutex
-	msgs    []llm.Message
-	running atomic.Bool // 是否有 turn 正在执行（仅 Serve 路径维护）
+	mu          sync.Mutex
+	msgs        []llm.Message
+	lastInput   int         // 最近一次模型调用的真实 input tokens（0=端点未报）
+	autoCompact int         // 自动压缩阈值（估算 tokens；≤0 关闭）
+	running     atomic.Bool // 是否有 turn 正在执行（Serve 路径与 Compact 维护）
 
 	persist   func([]llm.Message) // 持久化回调，可为 nil
 	persisted int                 // 已交给 persist 的历史水位线
@@ -210,6 +214,8 @@ func (a *Agent) runTurn(ctx context.Context, userInput string, ui UI) error {
 	if system == "" {
 		system = SystemPrompt()
 	}
+	// 估算用量超阈值时先自动压缩（在追加本拍输入之前，保证本拍轮次完整保留）。
+	a.autoCompactIfNeeded(ctx, ui)
 	a.append(llm.Message{Role: llm.RoleUser, Text: userInput})
 
 	calls := 0
@@ -257,6 +263,8 @@ func (a *Agent) runTurn(ctx context.Context, userInput string, ui UI) error {
 			CacheRead:  resp.Usage.CacheReadTokens,
 			CacheWrite: resp.Usage.CacheWriteTokens,
 		})
+		// 记下真实 input tokens：估算（先验）之外给 /context 一个后验真值。
+		a.recordInputTokens(resp.Usage.InputTokens)
 
 		a.append(llm.Message{
 			Role:     llm.RoleAssistant,

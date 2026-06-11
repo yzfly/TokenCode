@@ -43,7 +43,7 @@ go run ./cmd/tokencode
 权限四模式：**plan**（只读）/ **review**（逐次 y/n/a 确认，默认）/ **auto**（小模型按规则自动裁决）/ **yolo**（全放行）。
 Shift+Tab 循环切换，或用 `/plan` `/review` `/auto` `/yolo`；`/exit` 或 Ctrl-D 退出，跑动中 Ctrl-C 打断当前轮。
 
-输入 `/` 弹出命令补全菜单：`/help` 全部命令与快捷键、`/race` 并行竞赛、`/model` 查看与热切换模型、`/agents` 子代理类型（兼容 `.claude/agents`）、`/skills` 技能列表（`/技能名 [参数]` 调用，兼容 `.claude/skills`）、`/mcp` MCP server 状态与重连、`/usage`（别名 `/cost` `/stats`）本月与今日 token 用量统计（账本 JSONL 按月落在数据目录，WebUI 大盘同源）。`! <命令>` 直通 shell。
+输入 `/` 弹出命令补全菜单：`/help` 全部命令与快捷键、`/race` 并行竞赛、`/model` 查看与热切换模型、`/agents` 子代理类型（兼容 `.claude/agents`）、`/skills` 技能列表（`/技能名 [参数]` 调用，兼容 `.claude/skills`）、`/mcp` MCP server 状态与重连、`/usage`（别名 `/cost` `/stats`）本月与今日 token 用量统计（账本 JSONL 按月落在数据目录，WebUI 大盘同源）、`/context` 上下文用量（估算 tokens、消息占比、距自动压缩的余量）、`/compact [侧重点]` 把旧历史压缩成结构化摘要（保留最近 2 轮；估算超过 `compact.auto_threshold`（默认 80000，0=关闭）时 turn 前自动压缩）。`! <命令>` 直通 shell。
 
 ### 常用 flag
 
