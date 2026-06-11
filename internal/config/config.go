@@ -15,6 +15,7 @@ import (
 	"github.com/yzfly/tokencode/internal/auth"
 	"github.com/yzfly/tokencode/internal/catalog"
 	"github.com/yzfly/tokencode/internal/mcp"
+	"github.com/yzfly/tokencode/internal/permrules"
 )
 
 // 协议类型。每种协议对应 internal/llm 里的一个 codec，名字就叫协议名。
@@ -53,6 +54,10 @@ type Config struct {
 	MCP          map[string]mcp.ServerConfig `json:"mcp"`        // MCP server 名 → stdio 配置
 	Race         RaceConfig                  `json:"race"`       // 并行竞赛模式（/race）
 	Channels     ChannelsConfig              `json:"channels"`   // IM 通道（团队模式，serve 时启用）
+
+	// Permissions 是全局权限规则三表（allow/ask/deny，CC 语法）。与项目级
+	// .tokencode/permissions.json 合并后生效，见 internal/permrules。
+	Permissions permrules.Lists `json:"permissions"`
 }
 
 // ChannelsConfig 是各 IM 通道的接入凭据。纯配置：adapter 实现在 internal/channel 下。

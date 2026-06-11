@@ -10,6 +10,7 @@ import (
 
 	"github.com/yzfly/tokencode/internal/agent"
 	"github.com/yzfly/tokencode/internal/llm"
+	"github.com/yzfly/tokencode/internal/permrules"
 	"github.com/yzfly/tokencode/internal/tools"
 )
 
@@ -218,5 +219,28 @@ func TestRunErrorBecomesIsError(t *testing.T) {
 	}
 	if last.Type != "result" || !last.IsError || !strings.Contains(last.Result, "connection refused") {
 		t.Fatalf("error result event wrong: %+v", last)
+	}
+}
+
+func TestGateToolRulesDenyBeatsYoloAndWhitelist(t *testing.T) {
+	rules, warns := permrules.Compile(permrules.Lists{Deny: []string{"bash(rm -rf *)"}})
+	if len(warns) != 0 {
+		t.Fatalf("unexpected warns: %v", warns)
+	}
+	ran := false
+	g := GateToolRules(stubTool{name: "bash", ran: &ran}, Allow([]string{"bash"}, true), rules)
+
+	// deny 命中：白名单 + yolo 都拦不回来。
+	_, err := g.Execute(context.Background(), json.RawMessage(`{"command":"rm -rf /"}`))
+	if err == nil || !strings.Contains(err.Error(), "deny") || ran {
+		t.Fatalf("deny rule must reject before whitelist/yolo: err=%v ran=%v", err, ran)
+	}
+	// deny 不命中：照常走白名单放行。
+	if _, err := g.Execute(context.Background(), json.RawMessage(`{"command":"ls"}`)); err != nil || !ran {
+		t.Fatalf("non-denied call should pass whitelist: err=%v ran=%v", err, ran)
+	}
+	// nil rules：行为与旧 GateTool 完全一致。
+	if _, err := GateTool(stubTool{name: "bash"}, Allow(nil, false)).Execute(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "rejected (headless)") {
+		t.Fatalf("nil rules should keep whitelist semantics: %v", err)
 	}
 }

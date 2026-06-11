@@ -1,6 +1,10 @@
 package tui
 
-import "sync"
+import (
+	"sync"
+
+	"github.com/yzfly/tokencode/internal/permrules"
+)
 
 // permMode 是权限模式。循环顺序 plan → review → auto → yolo → plan。
 type permMode int
@@ -76,6 +80,45 @@ func (p *perms) decide(tool string) permDecision {
 			return permAllow
 		}
 		return permConfirm
+	}
+}
+
+// gateAction 是规则裁决与模式裁决合成后的最终动作。
+type gateAction int
+
+const (
+	gateAllow        gateAction = iota // 放行
+	gateReject                         // 拒绝（deny 规则或 plan 只读铁律）
+	gateConfirmHuman                   // 强制人工确认（ask 规则命中，auto/yolo 也要问）
+	gateConfirmMode                    // 走模式默认确认路径（auto 可先问小模型）
+)
+
+// resolveGate 合成两路裁决（纯函数，便于测试）。优先级：
+//
+//	deny 规则 > plan 只读铁律 > ask 规则 > allow 规则 > 模式默认。
+//
+// 即：deny 永远拒；plan 下规则 allow 也突破不了只读；ask 在任何模式下都
+// 强制人工确认（CC 语义，yolo/auto 也要问）；allow 跳过确认直接放行。
+func resolveGate(rd permrules.Decision, pd permDecision) gateAction {
+	if rd == permrules.Deny {
+		return gateReject
+	}
+	switch pd {
+	case permReject: // plan 只读铁律：allow/ask 都不突破
+		return gateReject
+	case permAllow: // read 恒放行 / yolo / 'a' 记住
+		if rd == permrules.Ask {
+			return gateConfirmHuman
+		}
+		return gateAllow
+	default: // permConfirm（review / auto）
+		switch rd {
+		case permrules.Allow:
+			return gateAllow
+		case permrules.Ask:
+			return gateConfirmHuman
+		}
+		return gateConfirmMode
 	}
 }
 
