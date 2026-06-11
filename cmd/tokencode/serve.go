@@ -13,6 +13,7 @@ import (
 	"github.com/yzfly/tokencode/internal/agent"
 	"github.com/yzfly/tokencode/internal/channel"
 	"github.com/yzfly/tokencode/internal/channel/feishu"
+	"github.com/yzfly/tokencode/internal/channel/wechat"
 	"github.com/yzfly/tokencode/internal/config"
 	"github.com/yzfly/tokencode/internal/headless"
 	"github.com/yzfly/tokencode/internal/llm"
@@ -66,7 +67,7 @@ func cmdServe(args []string) int {
 
 	// IM 通道（团队模式）：config 配了 channels 才起。每个成员绑定一个
 	// workspace，agent 常驻（内存历史），工具被硬隔离在该 workspace 之内。
-	if cfg.Channels.Feishu.Enabled() {
+	if cfg.Channels.Feishu.Enabled() || cfg.Channels.Wechat.Enabled {
 		logf := func(format string, args ...any) { fmt.Printf(format+"\n", args...) }
 		router := channel.NewRouter(channel.NewStore(""), func(b channel.Binding) (*agent.Agent, string, error) {
 			name := b.Model
@@ -79,9 +80,15 @@ func cmdServe(args []string) int {
 			}
 			return assembleHeadless(cfg, name, "", *maxTokens, allowed, b.Yolo, "channel:"+b.Channel, b.Workspace)
 		}, logf)
-		router.Register(feishu.New(feishu.Config{AppID: cfg.Channels.Feishu.AppID, AppSecret: cfg.Channels.Feishu.AppSecret}, logf))
+		if cfg.Channels.Feishu.Enabled() {
+			router.Register(feishu.New(feishu.Config{AppID: cfg.Channels.Feishu.AppID, AppSecret: cfg.Channels.Feishu.AppSecret}, logf))
+			fmt.Println("通道 feishu 启动中（长连接，免公网 IP）· 配对：tokencode team pair -workspace <目录>")
+		}
+		if cfg.Channels.Wechat.Enabled {
+			router.Register(wechat.New(wechat.Config{BaseURL: cfg.Channels.Wechat.BaseURL}, nil, logf))
+			fmt.Println("通道 wechat 启动中（iLink 长轮询，实验性/DM-only）· 接入：tokencode wechat login")
+		}
 		router.Start(ctx)
-		fmt.Println("通道 feishu 启动中（长连接，免公网 IP）· 配对：tokencode team pair -workspace <目录>")
 	}
 	errCh := make(chan error, 1)
 	go func() { errCh <- httpSrv.ListenAndServe() }()

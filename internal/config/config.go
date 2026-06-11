@@ -58,6 +58,7 @@ type Config struct {
 // ChannelsConfig 是各 IM 通道的接入凭据。纯配置：adapter 实现在 internal/channel 下。
 type ChannelsConfig struct {
 	Feishu FeishuChannel `json:"feishu"`
+	Wechat WechatChannel `json:"wechat"`
 }
 
 // FeishuChannel 是飞书自建应用凭据（长连接接入，免公网 IP）。
@@ -68,6 +69,13 @@ type FeishuChannel struct {
 
 // Enabled 报告飞书通道是否配置完整。
 func (f FeishuChannel) Enabled() bool { return f.AppID != "" && f.AppSecret != "" }
+
+// WechatChannel 是微信 iLink Bot 通道（实验性，DM-only）。凭证不在 config 里
+// ——成员各自 `tokencode wechat login` 扫码落盘；这里只有显式开关与基座覆盖。
+type WechatChannel struct {
+	Enabled bool   `json:"enabled"`
+	BaseURL string `json:"base_url"` // 空用官方默认基座（协议灰度期可覆盖）
+}
 
 // RaceConfig 是竞赛模式的可调参数。
 type RaceConfig struct {

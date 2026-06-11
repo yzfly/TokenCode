@@ -36,6 +36,7 @@
 - 跑动中 Ctrl-C 打断当前轮、回提示符；非 tty（管道/重定向）自动退化为纯文本。
 - **Headless 与 HTTP API（SDK/通道/WebUI 的共同地基）**：`-p` 跑一个 turn 即退出（`-output text|json|stream-json`，stream-json 是 JSONL 事件流、最后一行恒为 result；成功 0 / 出错 1）；`tokencode serve` 起 HTTP API（`GET /healthz` + `POST /v1/run`，同步 JSON 或 SSE 流，默认仅回环、`-max-concurrent` 信号量限流、每请求独立 agent）。两条入口共用 `internal/headless` 的执行/事件/白名单语义：守卫包在工具层（白名单外喂回 "rejected (headless)"），子代理经共享注册表自动继承。
 - **团队模式 · IM 通道（飞书 v1）**：成员用自己的飞书账号远程驱动自己的工作空间——`internal/channel` 通道抽象（Adapter/Router/team store）+ 飞书长连接 adapter（官方 SDK ws，免公网 IP，3 秒 ack 红线内异步投递、event_id 去重）。`tokencode team pair -workspace <目录>` 生成 8 位配对码（1 小时/单次有效，最多 3 个 pending，存 `team.json` 0600 原子写），成员在 IM 单聊发码即绑定；绑定可配工具白名单（默认只读集）/ yolo / 专属模型。每个 `channel+user+chat` 一个常驻 agent（内存历史、TryLock 互斥，在跑时新消息回「稍候」），turn 开始回「收到」、结束回最终文本；工具被 SetRoot 硬隔离在成员 workspace 内，用量记账 Source=`channel:feishu`。v0 边界：只处理单聊文本，卡片流式/审批按钮/群聊/钉钉企微后置。
+- **微信通道（iLink Bot API，实验性）**：`tokencode wechat login` 扫码接入（独立 bot 身份、DM-only），`internal/channel/wechat` 纯 Go 实现协议客户端 + adapter（getupdates 长轮询、context_token 按 peer 持久化、游标落盘续传、msg_id+内容 MD5 双重去重、-2 限频退避、-14 过期暂停提示重扫），凭证/状态存 `~/.config/tokencode/wechat/`（0600）；config `channels.wechat.enabled` 显式开关，协议灰度期 `base_url` 可覆盖。
 
 ## 架构概览（各包职责）
 

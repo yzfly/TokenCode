@@ -110,6 +110,17 @@ tokencode team pair -workspace ~/work/proj-b -tools read,bash  # 可配工具白
 
 默认工具白名单是只读集（`read,websearch,webfetch`）；`-tools` 放开写类工具、`-yolo` 全放行（信任成员才开）。每成员会话历史常驻 serve 进程内存（重启清零）；v0 只处理单聊文本，卡片流式/审批按钮/群聊后置。
 
+#### 微信接入（实验性）
+
+走腾讯官方 **iLink Bot API**（ClawBot 背后的 HTTP 协议，纯 Go、免浏览器/Windows 宿主）。成员各自扫码、各得一个独立 bot 账号：
+
+```bash
+tokencode wechat login    # 终端出二维码，手机微信扫码确认即落盘凭证（0600）
+tokencode wechat list     # 已登录账号；logout <account_id> 移除
+```
+
+config 里显式开启通道（`"channels": {"wechat": {"enabled": true}}`，`base_url` 可覆盖基座），`tokencode serve` 即自动拉起长轮询；配对绑定工作空间与飞书同一套（`team pair` 发码）。**注意限制**：扫码连上的是独立 iLink bot 身份（`xxx@im.bot`），不是你的微信本身——**只支持私聊 DM**，队友要私聊这个 bot 而不是扫码者；协议处于灰度期、无正式公开文档，token 会过期需重扫（serve 日志会提示），字段与限频策略可能随腾讯调整而变。
+
 ### 模型与国内 Coding Plan 开箱即用
 
 内置 [models.dev](https://models.dev) 目录快照（141 个 provider），**Kimi for Coding、智谱 GLM Coding Plan、阿里百炼 Coding Plan、MiniMax、DeepSeek、腾讯混元**等国内模型与包月套餐无需写任何配置：
