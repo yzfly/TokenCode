@@ -10,6 +10,7 @@ require (
 	github.com/dop251/goja v0.0.0-20260607120635-348e6bea910d
 	github.com/larksuite/oapi-sdk-go/v3 v3.9.5
 	github.com/open-dingtalk/dingtalk-stream-sdk-go v0.9.1
+	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	golang.org/x/term v0.41.0
 )
 
