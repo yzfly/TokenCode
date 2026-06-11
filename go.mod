@@ -9,6 +9,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.1-0.20250404203927-76690c660834
 	github.com/dop251/goja v0.0.0-20260607120635-348e6bea910d
 	github.com/larksuite/oapi-sdk-go/v3 v3.9.5
+	github.com/open-dingtalk/dingtalk-stream-sdk-go v0.9.1
 	golang.org/x/term v0.41.0
 )
 
@@ -31,6 +32,7 @@ require (
 	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/google/pprof v0.0.0-20230207041349-798e818bf904 // indirect
+	github.com/google/uuid v1.3.0 // indirect
 	github.com/gorilla/css v1.0.1 // indirect
 	github.com/gorilla/websocket v1.5.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect

@@ -35,7 +35,7 @@
 - 权限三模式：**plan**（只读）/ **review**（逐次 y/n/a 确认，默认）/ **yolo**（全放行）；Shift+Tab 循环或 `/plan` `/review` `/yolo` 切换。
 - 跑动中 Ctrl-C 打断当前轮、回提示符；非 tty（管道/重定向）自动退化为纯文本。
 - **Headless 与 HTTP API（SDK/通道/WebUI 的共同地基）**：`-p` 跑一个 turn 即退出（`-output text|json|stream-json`，stream-json 是 JSONL 事件流、最后一行恒为 result；成功 0 / 出错 1）；`tokencode serve` 起 HTTP API（`GET /healthz` + `POST /v1/run`，同步 JSON 或 SSE 流，默认仅回环、`-max-concurrent` 信号量限流、每请求独立 agent）。两条入口共用 `internal/headless` 的执行/事件/白名单语义：守卫包在工具层（白名单外喂回 "rejected (headless)"），子代理经共享注册表自动继承。
-- **团队模式 · IM 通道（飞书 v1）**：成员用自己的飞书账号远程驱动自己的工作空间——`internal/channel` 通道抽象（Adapter/Router/team store）+ 飞书长连接 adapter（官方 SDK ws，免公网 IP，3 秒 ack 红线内异步投递、event_id 去重）。`tokencode team pair -workspace <目录>` 生成 8 位配对码（1 小时/单次有效，最多 3 个 pending，存 `team.json` 0600 原子写），成员在 IM 单聊发码即绑定；绑定可配工具白名单（默认只读集）/ yolo / 专属模型。每个 `channel+user+chat` 一个常驻 agent（内存历史、TryLock 互斥，在跑时新消息回「稍候」），turn 开始回「收到」、结束回最终文本；工具被 SetRoot 硬隔离在成员 workspace 内，用量记账 Source=`channel:feishu`。v0 边界：只处理单聊文本，卡片流式/审批按钮/群聊/钉钉企微后置。
+- **团队模式 · IM 通道（飞书 v1）**：成员用自己的飞书账号远程驱动自己的工作空间——`internal/channel` 通道抽象（Adapter/Router/team store）+ 飞书长连接 adapter（官方 SDK ws，免公网 IP，3 秒 ack 红线内异步投递、event_id 去重）。`tokencode team pair -workspace <目录>` 生成 8 位配对码（1 小时/单次有效，最多 3 个 pending，存 `team.json` 0600 原子写），成员在 IM 单聊发码即绑定；绑定可配工具白名单（默认只读集）/ yolo / 专属模型。每个 `channel+user+chat` 一个常驻 agent（内存历史、TryLock 互斥，在跑时新消息回「稍候」），turn 开始回「收到」、结束回最终文本；工具被 SetRoot 硬隔离在成员 workspace 内，用量记账 Source=`channel:<名>`。钉钉 Stream adapter 同构落地（官方 SDK 长连接收机器人单聊、msgId 去重、sessionWebhook 回文本），与飞书共用 Router 与配对流程。v0 边界：只处理单聊文本，卡片流式/审批按钮/群聊/企微后置。
 
 ## 架构概览（各包职责）
 
@@ -59,6 +59,7 @@ internal/headless/         无界面单 turn 执行：Run/Execute + 事件流 + 
 internal/serve/            HTTP API 雏形：/healthz + /v1/run（同步 JSON / SSE），装配经 Assemble 注入
 internal/channel/          IM 通道体系：Adapter 抽象 + Router（绑定路由/配对/常驻会话）+ team store（team.json）
 internal/channel/feishu/   飞书 adapter：官方 SDK 长连接收 im.message.receive_v1、im/v1/messages 发文本
+internal/channel/dingtalk/ 钉钉 adapter：官方 Stream SDK 长连接收机器人单聊、sessionWebhook 发文本
 internal/tools/            Tool interface + Registry（可绑定 per-agent 根）+ read/write/edit/bash/websearch/webfetch
 internal/tui/              Bubble Tea 外壳（alt-screen + viewport）
   run.go      启动 program + Serve/Pulse goroutine + 非 tty 回退
@@ -114,4 +115,4 @@ go vet ./...
 ## 下一步重点
 
 - **race 打磨**：败者提前退钱（够好即 cancel 全场）、多视角/投票裁判、预算上限、视角变体注入（variant 已留位）。
-- **IM 通道扩展**：飞书 v1 已落地；下一步钉钉 Stream adapter（抽象同构，边际成本低）、卡片流式进度、权限审批按钮、群聊@。
+- **IM 通道扩展**：飞书/钉钉已落地；下一步卡片流式进度、权限审批按钮、群聊@、企微智能机器人。

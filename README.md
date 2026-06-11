@@ -79,9 +79,9 @@ curl -N -H 'Accept: text/event-stream' http://127.0.0.1:8787/v1/run -d '{"prompt
 
 每个请求独立 agent 实例（无共享历史），`-max-concurrent`（默认 8）限制同时在跑的 run。
 
-### 团队模式（IM 接入，飞书 v1）
+### 团队模式（IM 接入，飞书/钉钉）
 
-团队每个成员用自己的飞书账号远程驱动**自己的工作空间**：单聊机器人发消息 → agent 在绑定的目录里跑一个 turn → 回最终结果。长连接接入，**免公网 IP**；文件工具被硬隔离在各自工作空间之内。
+团队每个成员用自己的飞书/钉钉账号远程驱动**自己的工作空间**：单聊机器人发消息 → agent 在绑定的目录里跑一个 turn → 回最终结果。长连接接入，**免公网 IP**；文件工具被硬隔离在各自工作空间之内。
 
 **1. 建飞书自建应用**（[open.feishu.cn](https://open.feishu.cn) 开发者后台 → 创建企业自建应用）：
 
@@ -98,15 +98,25 @@ curl -N -H 'Accept: text/event-stream' http://127.0.0.1:8787/v1/run -d '{"prompt
 }
 ```
 
+**钉钉**同理（[open.dingtalk.com](https://open.dingtalk.com) 开发者后台 → 创建企业内部应用）：「添加应用能力」加**机器人**，消息接收模式选 **Stream 模式**，发布后把应用凭证页的 Client ID / Client Secret 写进 config：
+
+```json
+{
+  "channels": {
+    "dingtalk": { "client_id": "dingxxx", "client_secret": "xxx" }
+  }
+}
+```
+
 **2. 起服务并配对成员**：
 
 ```bash
-tokencode serve                                                # config 配了 channels 即自动连飞书
+tokencode serve                                                # config 配了 channels 即自动连飞书/钉钉
 tokencode team pair -workspace ~/work/proj-a -name 小明        # 生成 8 位配对码
 tokencode team pair -workspace ~/work/proj-b -tools read,bash  # 可配工具白名单 / -model / -yolo
 ```
 
-成员在飞书里把配对码发给机器人即绑定成功（码 1 小时有效、单次有效，绑定存 `team.json`，0600）；之后直接发消息就是在自己的工作空间里驱动 agent。`tokencode team list` 看绑定与待认领码，`tokencode team remove <channel> <user_id>` 解绑。
+成员在 IM 里把配对码发给机器人即绑定成功（码 1 小时有效、单次有效，绑定存 `team.json`，0600）；之后直接发消息就是在自己的工作空间里驱动 agent。`tokencode team list` 看绑定与待认领码，`tokencode team remove <channel> <user_id>` 解绑。
 
 默认工具白名单是只读集（`read,websearch,webfetch`）；`-tools` 放开写类工具、`-yolo` 全放行（信任成员才开）。每成员会话历史常驻 serve 进程内存（重启清零）；v0 只处理单聊文本，卡片流式/审批按钮/群聊后置。
 

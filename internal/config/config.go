@@ -57,7 +57,8 @@ type Config struct {
 
 // ChannelsConfig 是各 IM 通道的接入凭据。纯配置：adapter 实现在 internal/channel 下。
 type ChannelsConfig struct {
-	Feishu FeishuChannel `json:"feishu"`
+	Feishu   FeishuChannel   `json:"feishu"`
+	Dingtalk DingtalkChannel `json:"dingtalk"`
 }
 
 // FeishuChannel 是飞书自建应用凭据（长连接接入，免公网 IP）。
@@ -68,6 +69,15 @@ type FeishuChannel struct {
 
 // Enabled 报告飞书通道是否配置完整。
 func (f FeishuChannel) Enabled() bool { return f.AppID != "" && f.AppSecret != "" }
+
+// DingtalkChannel 是钉钉企业内部应用凭据（Stream 长连接接入，免公网 IP）。
+type DingtalkChannel struct {
+	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret"`
+}
+
+// Enabled 报告钉钉通道是否配置完整。
+func (d DingtalkChannel) Enabled() bool { return d.ClientID != "" && d.ClientSecret != "" }
 
 // RaceConfig 是竞赛模式的可调参数。
 type RaceConfig struct {
