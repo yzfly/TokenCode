@@ -38,6 +38,14 @@ type (
 		err    error
 	}
 
+	// compactDoneMsg 是 /compact 异步完成的回报：压缩前后的条数与估算 tokens。
+	compactDoneMsg struct {
+		summarized          int // 被折叠进摘要的消息条数（0=历史太短没压）
+		beforeLen, afterLen int
+		beforeEst, afterEst int
+		err                 error
+	}
+
 	// confirmReqMsg 由 worker 发出后阻塞等 reply；Model 显示确认、收键后写回。
 	// 子代理并行时可能同时有多个在途，Model 排队逐个确认。
 	confirmReqMsg struct {
@@ -82,6 +90,7 @@ func (b *bridge) UI() agent.UI {
 		OnToolCall:   func(name string, input json.RawMessage) bool { return b.gateTool("", name, input) },
 		OnToolResult: func(name, result string, isErr bool) { b.prog.Send(toolResultMsg{"", name, result, isErr}) },
 		OnThinking:   func(active bool) { b.prog.Send(thinkingMsg{active}) },
+		OnNote:       func(text string) { b.prog.Send(noteMsg{text: text}) },
 	}
 }
 

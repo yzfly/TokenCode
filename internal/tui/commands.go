@@ -48,6 +48,13 @@ func (m model) commands() []command {
 				m.emit(transItem{kind: tNote, text: usageText(time.Now())})
 				return m, nil
 			}},
+		{name: "compact", argHint: "[侧重点]", summary: "压缩历史上下文为摘要（长会话续命）",
+			run: func(m model, args string) (tea.Model, tea.Cmd) { return m.cmdCompact(args) }},
+		{name: "context", summary: "上下文用量：估算 tokens、消息占比与压缩余量",
+			run: func(m model, _ string) (tea.Model, tea.Cmd) {
+				m.emit(transItem{kind: tNote, text: m.contextText()})
+				return m, nil
+			}},
 		{name: "agents", summary: "列出可用的子代理类型",
 			run: func(m model, _ string) (tea.Model, tea.Cmd) {
 				m.emit(transItem{kind: tNote, text: m.agentsText()})

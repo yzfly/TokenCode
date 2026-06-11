@@ -86,6 +86,8 @@ type model struct {
 	modelName string
 	baseURL   string
 
+	agent       *agent.Agent   // /compact、/context 直接查改历史；可为 nil（测试）
+	compacting  bool           // /compact 进行中（输入锁定、指示行显示）
 	cfg         config.Config  // /model 列表用
 	skills      []skill.Skill  // /skills 列表与 /技能名 调用
 	mcp         *mcp.Manager   // /mcp 状态，可为 nil
@@ -214,6 +216,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		default:
 			m.raceResult = msg.res
 			m.emit(transItem{kind: tNote, text: raceBoardText(msg.res)})
+		}
+		return m, textarea.Blink
+
+	case compactDoneMsg:
+		m.compacting = false
+		m.cancel = nil
+		m.state = stateIdle
+		m.ta.Focus()
+		switch {
+		case msg.err != nil && errors.Is(msg.err, context.Canceled):
+			m.emit(transItem{kind: tNote, text: "（压缩已中断，历史未动）"})
+		case msg.err != nil:
+			m.emit(transItem{kind: tErr, text: msg.err.Error()})
+		case msg.summarized == 0:
+			m.emit(transItem{kind: tNote, text: "历史太短，无需压缩"})
+		default:
+			m.emit(transItem{kind: tNote, text: fmt.Sprintf(
+				"已压缩 %d 条历史为摘要 · 条数 %d→%d · 估算 tokens %s→%s",
+				msg.summarized, msg.beforeLen, msg.afterLen,
+				fmtTokens(msg.beforeEst), fmtTokens(msg.afterEst))})
 		}
 		return m, textarea.Blink
 
@@ -798,6 +820,8 @@ func (m model) statusIndicator() string {
 	switch {
 	case m.racing:
 		return m.racePanel
+	case m.compacting:
+		return "compacting · 正在压缩历史上下文…"
 	case m.thinking:
 		return "thinking…"
 	case m.state != stateRunning:

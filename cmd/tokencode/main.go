@@ -122,6 +122,7 @@ func main() {
 	reg := tools.NewRegistry(tools.Read(), tools.Write(), tools.Edit(), tools.Bash(),
 		tools.WebSearch(), tools.WebFetch())
 	ag := agent.New(client, reg, tgt.Model, *maxTokens)
+	ag.SetAutoCompact(cfg.Compact.Threshold())
 
 	// 子代理与动态工作流：与主 agent 共享注册表、客户端（跟随 /model 热切换）。
 	runner := subagent.NewRunner(ag.Client, reg, *maxTokens, subagent.Discover(cwd))

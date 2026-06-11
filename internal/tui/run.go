@@ -74,6 +74,7 @@ func Run(ag *agent.Agent, opts Options) error {
 	perms := newPerms(initial)
 
 	m := newModel(opts.Events, opts.Idle, perms, opts.Model, opts.BaseURL)
+	m.agent = ag
 	m.cfg, m.skills, m.mcp, m.switchModel = opts.Cfg, opts.Skills, opts.MCP, opts.SwitchModel
 	m.version, m.workspace = opts.Version, opts.Workspace
 	if opts.Agents != nil {
@@ -138,6 +139,7 @@ func runPlain(ag *agent.Agent, opts Options) error {
 	}
 	streamed := false // 本次完成是否已流式打印过（避免 OnAssistant 重复输出）
 	ui := agent.UI{
+		OnNote: func(text string) { fmt.Println("·", text) },
 		OnAssistantDelta: func(d string) {
 			if !streamed {
 				fmt.Println()

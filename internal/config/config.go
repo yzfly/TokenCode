@@ -53,6 +53,25 @@ type Config struct {
 	MCP          map[string]mcp.ServerConfig `json:"mcp"`        // MCP server 名 → stdio 配置
 	Race         RaceConfig                  `json:"race"`       // 并行竞赛模式（/race）
 	Channels     ChannelsConfig              `json:"channels"`   // IM 通道（团队模式，serve 时启用）
+	Compact      CompactConfig               `json:"compact"`    // 上下文自动压缩（/compact）
+}
+
+// DefaultAutoCompactThreshold 是自动压缩的默认阈值（估算 tokens）。
+const DefaultAutoCompactThreshold = 80000
+
+// CompactConfig 是上下文压缩的可调参数。
+type CompactConfig struct {
+	// AutoThreshold 是自动压缩阈值（估算 tokens 超过即在 turn 前压缩）。
+	// 指针区分「未配置=默认 80000」与「显式 0=关闭」。
+	AutoThreshold *int `json:"auto_threshold"`
+}
+
+// Threshold 返回生效的自动压缩阈值：未配置用默认，显式 0（或负数）关闭。
+func (c CompactConfig) Threshold() int {
+	if c.AutoThreshold == nil {
+		return DefaultAutoCompactThreshold
+	}
+	return *c.AutoThreshold
 }
 
 // ChannelsConfig 是各 IM 通道的接入凭据。纯配置：adapter 实现在 internal/channel 下。
