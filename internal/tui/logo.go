@@ -23,7 +23,7 @@ func renderBanner(modelName, baseURL string, mode permMode, width int) string {
 		art = logoSmall
 	}
 	logo := logoStyle.Render(strings.TrimRight(art, "\n"))
-	tagline := taglineStyle.Render("为并行而生的 Agent 运行时")
+	tagline := taglineStyle.Render("Token 燃烧机，为 Token 燃烧而生")
 
 	cardW := width - 4
 	switch {

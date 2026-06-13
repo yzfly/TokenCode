@@ -1,6 +1,6 @@
 # TokenCode
 
-> **为并行而生、对团队友好的 Agent 引擎。** 当前形态：一个 Go 终端编码 agent——单 agent 底座 + TUI 之上，已长出第一种并行模式 `/race`（最多 1000 个 agent 隔离竞赛解题、裁判择优）。方向：把编码 agent 从「个人终端工具」变成「团队基础设施」。路线见 [`ROADMAP.md`](ROADMAP.md)。
+> **Token 燃烧机，为 Token 燃烧而生。** 把 token 当燃料、用并行换质量的 Agent 引擎，对团队友好。当前形态：一个 Go 终端编码 agent——单 agent 底座 + TUI 之上，已长出第一种并行模式 `/race`（最多 1000 个 agent 隔离竞赛解题、裁判择优）。方向：把编码 agent 从「个人终端工具」变成「团队基础设施」。路线见 [`ROADMAP.md`](ROADMAP.md)。
 
 ![TokenCode TUI 截图](assets/screenshot.png)
 
