@@ -3,6 +3,9 @@
 // 跑完后裁判流水线（客观粗筛 → 并行打分 → 决赛）选出冠军，
 // 经用户确认把冠军 diff 应用回主工作区。
 //
+// 可选「够好即收」（Options.GoodEnough）：racer 冲线立即初评，首个达标者
+// 当场夺冠并取消全场——排队的不再起跑、在跑的立即停手，败者退钱。
+//
 // 包本身零内部依赖：racer 怎么跑（Spawn）、裁判模型怎么调（Complete）
 // 都由调用方注入，这里只负责编排与 git 资源生命周期。
 package race
@@ -23,6 +26,10 @@ const MaxN = 1000
 // defaultConcurrency 是同时在飞的 racer 默认窗口（LLM 限流与本机资源的折中）。
 const defaultConcurrency = 8
 
+// OutRefund 是「够好即收」触发后未完赛 racer 的出局标注（败者退钱）。
+// 导出给外壳做展示区分：退钱不是失败。
+const OutRefund = "提前退钱：冠军已产生，取消未完赛者"
+
 // SpawnFunc 跑一个 racer：在 dir（它的 worktree）里完成 task，返回实现报告。
 type SpawnFunc func(ctx context.Context, index int, prompt, dir string) (report string, err error)
 
@@ -36,6 +43,9 @@ type Options struct {
 	Concurrency int    // 同时在飞窗口；≤0 用默认
 	Check       string // 客观校验命令（在各 worktree 内跑）；空=跳过
 	RepoRoot    string // git 仓库根
+	// GoodEnough 是「够好即收」阈值（1-10）：racer 冲线立即初评，首个达标者
+	// 当场夺冠并取消全场（败者退钱）。≤0 关闭（全员跑完再裁判）。
+	GoodEnough int
 	// Variant 生成第 i 个 racer 的任务提示（多样性扩展点）；nil=恒等。
 	Variant func(index int, task string) string
 }
@@ -49,14 +59,15 @@ type Deps struct {
 
 // Progress 是竞赛的聚合进度快照。
 type Progress struct {
-	Phase   string // "racing" | "judging" | "final"
-	N       int
-	Queued  int
-	Running int
-	Done    int
-	Failed  int
-	Scored  int // judging 阶段已打分数
-	Judging int // judging 阶段的幸存者总数
+	Phase    string // "racing" | "judging" | "final"
+	N        int
+	Queued   int
+	Running  int
+	Done     int
+	Failed   int
+	Refunded int // 提前退钱的败者数（够好即收触发后被取消/未起跑）
+	Scored   int // judging 阶段已打分数
+	Judging  int // judging 阶段的幸存者总数
 }
 
 // Candidate 是一个 racer 的最终产物。
@@ -99,6 +110,9 @@ func Run(ctx context.Context, o Options, deps Deps) (*Result, error) {
 	if window <= 0 {
 		window = defaultConcurrency
 	}
+	if o.GoodEnough > 10 {
+		o.GoodEnough = 10 // 评分满分 10，再高等于永不触发
+	}
 	variant := o.Variant
 	if variant == nil {
 		variant = func(_ int, task string) string { return task }
@@ -117,15 +131,24 @@ func Run(ctx context.Context, o Options, deps Deps) (*Result, error) {
 	trees := make([]*worktree, o.N)
 	var mu sync.Mutex
 	prog := Progress{Phase: "racing", N: o.N, Queued: o.N}
+	// report 在锁内串行执行进度回调：快照有序送达，回调方无需自己加锁。
 	report := func(mut func(*Progress)) {
 		mu.Lock()
+		defer mu.Unlock()
 		mut(&prog)
-		snap := prog
-		mu.Unlock()
 		if deps.Progress != nil {
-			deps.Progress(snap)
+			deps.Progress(prog)
 		}
 	}
+
+	// 够好即收（败者退钱）：racer 冲线立即初评，首个达标者当场夺冠，
+	// raceCtx 取消让排队者不再起跑、在跑者立即停手——没烧的 token 就是退回的预算。
+	raceCtx, stopField := ctx, context.CancelFunc(func() {})
+	if o.GoodEnough > 0 {
+		raceCtx, stopField = context.WithCancel(ctx)
+	}
+	defer stopField()
+	var champion *Candidate // 提前夺冠者；mu 保护
 
 	sem := make(chan struct{}, window)
 	var wg sync.WaitGroup
@@ -138,18 +161,40 @@ func Run(ctx context.Context, o Options, deps Deps) (*Result, error) {
 			select {
 			case sem <- struct{}{}:
 				defer func() { <-sem }()
-			case <-ctx.Done():
-				c.Out = "已取消"
-				report(func(p *Progress) { p.Queued--; p.Failed++ })
+			case <-raceCtx.Done():
+				if ctx.Err() != nil {
+					c.Out = "已取消"
+					report(func(p *Progress) { p.Queued--; p.Failed++ })
+				} else {
+					c.Out = OutRefund
+					report(func(p *Progress) { p.Queued--; p.Refunded++ })
+				}
 				return
 			}
 			report(func(p *Progress) { p.Queued--; p.Running++ })
-			ok := runRacer(ctx, c, &trees[i], o, deps, repo, baseDir, runID, variant)
+			ok := runRacer(raceCtx, c, &trees[i], o, deps, repo, baseDir, runID, variant)
+			if ok && o.GoodEnough > 0 {
+				scoreEarly(raceCtx, deps.Complete, o.Task, c)
+				mu.Lock()
+				if champion == nil && c.Score >= o.GoodEnough {
+					champion = c
+					stopField()
+				}
+				mu.Unlock()
+			}
+			refunded := !ok && raceCtx.Err() != nil && ctx.Err() == nil
+			if refunded {
+				// 全场已提前收：未完赛不算失败，算退钱。
+				c.Out = OutRefund
+			}
 			report(func(p *Progress) {
 				p.Running--
-				if ok {
+				switch {
+				case ok:
 					p.Done++
-				} else {
+				case refunded:
+					p.Refunded++
+				default:
 					p.Failed++
 				}
 			})
@@ -161,35 +206,51 @@ func Run(ctx context.Context, o Options, deps Deps) (*Result, error) {
 		return nil, ctx.Err()
 	}
 
-	// ---- 阶段 2：裁判。幸存者 = 有非空 diff 且过了 check 的候选。
-	var alive []*Candidate
-	for _, c := range cands {
-		if c.Out == "" {
-			alive = append(alive, c)
+	var winner *Candidate
+	var reason string
+	if champion != nil {
+		// 够好即收：冠军已在赛中产生（其余幸存者初评都低于够好线），免终审。
+		report(func(p *Progress) { p.Phase = "final" })
+		winner = champion
+		reason = fmt.Sprintf("够好即收：初评 %d 分 ≥ 够好线 %d · %s",
+			champion.Score, o.GoodEnough, champion.Reason)
+	} else {
+		// ---- 阶段 2：裁判。幸存者 = 有非空 diff 且过了 check 的候选。
+		var alive []*Candidate
+		for _, c := range cands {
+			if c.Out == "" {
+				alive = append(alive, c)
+			}
 		}
-	}
-	if len(alive) == 0 {
-		cleanupAll(trees, repo)
-		board := snapshot(cands)
-		return &Result{RunID: runID, RepoRoot: repo, Board: board},
-			fmt.Errorf("全军覆没：%d 个 racer 无一产出可用改动", o.N)
-	}
+		if len(alive) == 0 {
+			cleanupAll(trees, repo)
+			board := snapshot(cands)
+			return &Result{RunID: runID, RepoRoot: repo, Board: board},
+				fmt.Errorf("全军覆没：%d 个 racer 无一产出可用改动", o.N)
+		}
 
-	report(func(p *Progress) { p.Phase = "judging"; p.Judging = len(alive); p.Scored = 0 })
-	if len(alive) > finalists {
-		judgeScores(ctx, deps.Complete, o.Task, alive, window, func() {
-			report(func(p *Progress) { p.Scored++ })
-		})
-	}
-	sortByScore(alive)
+		report(func(p *Progress) { p.Phase = "judging"; p.Judging = len(alive); p.Scored = 0 })
+		switch {
+		case o.GoodEnough > 0:
+			// 赛中已逐个初评（无人过线），直接进终审。
+			report(func(p *Progress) { p.Scored = len(alive) })
+		case len(alive) > finalists:
+			judgeScores(ctx, deps.Complete, o.Task, alive, window, func() {
+				report(func(p *Progress) { p.Scored++ })
+			})
+		}
+		sortByScore(alive)
 
-	report(func(p *Progress) { p.Phase = "final" })
-	winIdx, reason, err := judgeFinal(ctx, deps.Complete, o.Task, alive)
-	if err != nil {
-		// 终审失败退化为按初评分取最高（分数全 0 时即第一个幸存者）。
-		winIdx, reason = 0, "终审失败，按初评分取最高: "+err.Error()
+		report(func(p *Progress) { p.Phase = "final" })
+		var winIdx int
+		var err error
+		winIdx, reason, err = judgeFinal(ctx, deps.Complete, o.Task, alive)
+		if err != nil {
+			// 终审失败退化为按初评分取最高（分数全 0 时即第一个幸存者）。
+			winIdx, reason = 0, "终审失败，按初评分取最高: "+err.Error()
+		}
+		winner = alive[winIdx]
 	}
-	winner := alive[winIdx]
 	winner.Reason = reason
 
 	// ---- 阶段 3：清理。冠军留分支，其余 worktree+分支全删。
@@ -251,6 +312,21 @@ func runRacer(ctx context.Context, c *Candidate, tree **worktree, o Options, dep
 		}
 	}
 	return true
+}
+
+// scoreEarly 在 racer 冲线后立即打初评分（够好即收模式），写回 c.Score/c.Reason。
+// 失败不致命：全场已收时标注未及评分，否则与裁判阶段同规——记 0 分留说明。
+func scoreEarly(ctx context.Context, complete CompleteFunc, task string, c *Candidate) {
+	score, reason, err := scoreOne(ctx, complete, task, c)
+	if err != nil {
+		if ctx.Err() != nil {
+			c.Score, c.Reason = 0, "未及评分（全场已提前收）"
+		} else {
+			c.Score, c.Reason = 0, "裁判失败: "+err.Error()
+		}
+		return
+	}
+	c.Score, c.Reason = score, reason
 }
 
 // cleanupAll 清掉所有还活着的 worktree（取消/全灭路径）。

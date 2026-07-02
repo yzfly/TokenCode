@@ -117,6 +117,7 @@ type WechatChannel struct {
 type RaceConfig struct {
 	Concurrency int    `json:"concurrency"` // 同时在飞的 racer 窗口；≤0 用内置默认（8）
 	Check       string `json:"check"`       // 客观校验命令（淘汰用，在各 worktree 内跑）；空=跳过
+	GoodEnough  int    `json:"good_enough"` // 够好即收阈值（1-10）：racer 冲线立即初评，首个达标者当场夺冠、全场退钱；≤0 关闭
 }
 
 // Target 是 -model 解析后的落点：构造 llm 客户端所需的全部信息。

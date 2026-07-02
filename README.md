@@ -33,6 +33,8 @@
 
 派 N 个 agent（N≤1000）**各自在隔离的 git worktree** 里独立解同一道题（文件工具被硬隔离在各自写空间），窗口化并发；跑完后裁判流水线择优——客观粗筛（空 diff / `race.check` 校验命令淘汰，零 token）→ 并行 LLM 打分 → top-4 决赛。排行榜出来后 `/race apply` 一键应用冠军改动（不自动 commit），冠军分支保留可追溯。
 
+配置 `race.good_enough`（1-10）可开启**够好即收**（败者退钱）：racer 冲线立即初评，首个达到够好线的当场夺冠并取消全场——排队的不再起跑、在跑的立即停手，没烧的 token 就是退回的预算。默认关闭（全员跑完再裁判）。
+
 ### 联网搜索
 
 `websearch` 多后端自动回退：设置 `TAVILY_API_KEY` 时走 [Tavily](https://tavily.com)（LLM 友好摘录，免费档 1000 次/月），否则 DuckDuckGo → Mojeek 免 key 兜底——零配置可用，有配置更好。`webfetch` 抓网页转纯文本。
@@ -308,7 +310,7 @@ go vet ./...
 - [x] 单 agent tool-use 循环（MVP 底座）
 - [x] streaming、会话持久化（`-continue`/`-resume`）、多 provider（anthropic/openai/google 三协议）
 - [x] 子代理（agent 工具）+ 动态工作流（workflow JS 编排）+ 联网搜索（Tavily/DDG/Mojeek）
-- [x] A · 横向爆破（竞赛）v1：`/race` 派 N 个、worktree 隔离、裁判择优 ——*打磨中：败者提前退钱、投票裁判、预算建模*
+- [x] A · 横向爆破（竞赛）v1：`/race` 派 N 个、worktree 隔离、裁判择优、败者退钱（`race.good_enough` 够好即收）——*打磨中：投票裁判、预算建模*
 - [x] 模型与国内 coding plan 开箱即用（内置 models.dev 目录 + `tokencode auth login`）
 - [x] 团队接入 v1：IM 通道体系——飞书/钉钉官方长连接 + 微信 iLink 扫码（实验性），配对码绑定、每成员独立工作空间
 - [x] SDK/CLI 可编程化与 WebUI：headless `-p`、`serve` HTTP API、Go SDK（`pkg/tokencode`）、WebUI 大盘/聊天/团队/模型四页

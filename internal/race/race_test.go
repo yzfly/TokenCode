@@ -192,6 +192,87 @@ func TestRunRace(t *testing.T) {
 	}
 }
 
+func TestRunRaceGoodEnough(t *testing.T) {
+	repo := initRepo(t)
+	ctx := context.Background()
+
+	// 全员都能写出 quality-9（≥ 够好线 5）：窗口压成 1，第一个冲线者
+	// 当场夺冠，其余 5 个直接退钱（排队的不再起跑）。
+	spawn := func(ctx context.Context, i int, prompt, dir string) (string, error) {
+		content := fmt.Sprintf("solution by %d quality-9\n", i)
+		return "done quality-9", os.WriteFile(filepath.Join(dir, "answer.txt"), []byte(content), 0o644)
+	}
+	var last Progress
+	res, err := Run(ctx, Options{
+		N: 6, Task: "t", Concurrency: 1, RepoRoot: repo, GoodEnough: 5,
+	}, Deps{Spawn: spawn, Complete: fakeComplete, Progress: func(p Progress) { last = p }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Winner == nil {
+		t.Fatal("no winner")
+	}
+	if res.Winner.Score != 9 {
+		t.Errorf("winner score = %d, want 9", res.Winner.Score)
+	}
+	if !strings.Contains(res.Reason, "够好即收") {
+		t.Errorf("reason = %q, want 够好即收", res.Reason)
+	}
+
+	// 败者 5 个全部标注退钱，进度也计入 Refunded。
+	refunded := 0
+	for _, c := range res.Board {
+		if c.Out == OutRefund {
+			refunded++
+		}
+	}
+	if refunded != 5 {
+		t.Errorf("refunded = %d, want 5\nboard: %+v", refunded, res.Board)
+	}
+	if last.Refunded != 5 {
+		t.Errorf("progress.Refunded = %d, want 5", last.Refunded)
+	}
+
+	// 冠军分支保留，其余分支与 worktree 全清。
+	if _, err := git(ctx, repo, "rev-parse", "--verify", res.Winner.Branch); err != nil {
+		t.Errorf("winner branch should be kept: %v", err)
+	}
+	out, _ := git(ctx, repo, "branch", "--list", "tokencode/race-*")
+	if n := len(strings.Fields(out)); n != 1 {
+		t.Errorf("loser branches should be deleted, got: %q", out)
+	}
+	wt, _ := git(ctx, repo, "worktree", "list")
+	if strings.Count(strings.TrimSpace(wt), "\n") != 0 {
+		t.Errorf("all worktrees should be removed:\n%s", wt)
+	}
+}
+
+func TestRunRaceGoodEnoughNoTrigger(t *testing.T) {
+	repo := initRepo(t)
+	// 无人达到够好线：退化为全员跑完，初评已在赛中完成，直接终审择优。
+	spawn := func(ctx context.Context, i int, prompt, dir string) (string, error) {
+		content := fmt.Sprintf("solution quality-%d\n", i+1)
+		return "done", os.WriteFile(filepath.Join(dir, "answer.txt"), []byte(content), 0o644)
+	}
+	res, err := Run(context.Background(), Options{
+		N: 3, Task: "t", RepoRoot: repo, GoodEnough: 9,
+	}, Deps{Spawn: spawn, Complete: fakeComplete})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Winner == nil || res.Winner.Index != 2 {
+		t.Fatalf("winner = %+v, want #2 (highest quality)", res.Winner)
+	}
+	for _, c := range res.Board {
+		if c.Out != "" {
+			t.Errorf("#%d should survive, got out: %q", c.Index, c.Out)
+		}
+		if c.Score != c.Index+1 {
+			t.Errorf("#%d score = %d, want %d (scored during race)", c.Index, c.Score, c.Index+1)
+		}
+	}
+}
+
 func TestRunRaceCheckEliminates(t *testing.T) {
 	repo := initRepo(t)
 	// 两个 racer 都写文件，但客观校验只放过 #1。

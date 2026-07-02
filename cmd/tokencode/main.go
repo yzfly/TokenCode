@@ -238,6 +238,7 @@ func main() {
 			Task:        task,
 			Concurrency: cfg.Race.Concurrency,
 			Check:       cfg.Race.Check,
+			GoodEnough:  cfg.Race.GoodEnough,
 			RepoRoot:    cwd,
 		}, race.Deps{
 			Spawn: func(ctx context.Context, i int, prompt, dir string) (string, error) {

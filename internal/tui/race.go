@@ -113,8 +113,12 @@ func racePanelText(p race.Progress) string {
 	case "final":
 		return "race · 决赛终审中"
 	default:
-		return fmt.Sprintf("race · %d 运行 · %d 排队 · %d 完成 · %d 出局 (N=%d)",
-			p.Running, p.Queued, p.Done, p.Failed, p.N)
+		s := fmt.Sprintf("race · %d 运行 · %d 排队 · %d 完成 · %d 出局",
+			p.Running, p.Queued, p.Done, p.Failed)
+		if p.Refunded > 0 {
+			s += fmt.Sprintf(" · %d 退钱", p.Refunded)
+		}
+		return s + fmt.Sprintf(" (N=%d)", p.N)
 	}
 }
 
@@ -133,6 +137,8 @@ func raceBoardText(res *race.Result) string {
 	b.WriteString("\n排行榜\n")
 	for _, c := range res.Board {
 		switch {
+		case c.Out == race.OutRefund:
+			fmt.Fprintf(&b, "  ↩ #%-3d %s\n", c.Index, c.Out)
 		case c.Out != "":
 			fmt.Fprintf(&b, "  ✗ #%-3d 出局 · %s\n", c.Index, c.Out)
 		case res.Winner != nil && c.Index == res.Winner.Index:
