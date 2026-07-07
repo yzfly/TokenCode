@@ -74,10 +74,10 @@ func TestDreamerDueBoundaries(t *testing.T) {
 	}
 }
 
-func TestDreamWritesAndRewritesMemory(t *testing.T) {
+func TestDreamAppliesIncrementalOps(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".tokencode", "memory.md")
-	fake := &fakeLLM{text: "- 用户偏好 Go\n- 项目用 SQLite"}
+	fake := &fakeLLM{text: "ADD user-go | 用户偏好 Go\nADD db | 项目用 SQLite"}
 	d := NewDreamer(DreamConfig{Model: "m", MemoryPath: path}, fake)
 
 	if err := d.Dream(context.Background(), someHistory(10)); err != nil {
@@ -87,30 +87,44 @@ func TestDreamWritesAndRewritesMemory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(b), "用户偏好 Go") {
-		t.Fatalf("memory.md 内容错误：%q", b)
+	if !strings.Contains(string(b), "- [user-go] 用户偏好 Go") || !strings.Contains(string(b), "- [db] 项目用 SQLite") {
+		t.Fatalf("playbook 内容错误：%q", b)
 	}
-	// 喂给梦的 prompt 应带旧记忆与对话。
+	// 喂给梦的 prompt 应标记空 playbook。
 	if !strings.Contains(fake.lastReq.Messages[0].Text, "（空）") {
-		t.Fatal("首梦的旧记忆应标记为空")
+		t.Fatal("首梦的现有条目应标记为空")
 	}
 
-	// 重写而非追加：第二个梦后旧内容消失。
-	fake.text = "- 只剩这一条"
+	// 增量而非重写：UPDATE/DELETE 只碰目标条目，其余保留。
+	fake.text = "UPDATE db | 换 MongoDB\nDELETE user-go"
 	if err := d.Dream(context.Background(), someHistory(10)); err != nil {
 		t.Fatal(err)
 	}
 	b, _ = os.ReadFile(path)
-	if strings.Contains(string(b), "用户偏好 Go") || !strings.Contains(string(b), "只剩这一条") {
-		t.Fatalf("memory.md 应被整体重写：%q", b)
+	if strings.Contains(string(b), "user-go") || !strings.Contains(string(b), "- [db] 换 MongoDB") {
+		t.Fatalf("增量合并错误：%q", b)
 	}
-	// 第二个梦应读到旧记忆。
-	if !strings.Contains(fake.lastReq.Messages[0].Text, "用户偏好 Go") {
-		t.Fatal("旧记忆应喂给下一个梦")
+	// 第二个梦应读到现有条目。
+	if !strings.Contains(fake.lastReq.Messages[0].Text, "[user-go] 用户偏好 Go") {
+		t.Fatal("现有条目应喂给下一个梦")
 	}
 	// seen 更新：同样长度的历史不再算新材料。
 	if d.seen() != 10 {
 		t.Fatalf("梦成后 seenLen 应为 10，得到 %d", d.seen())
+	}
+
+	// 无洞察（NOOP）：文件不动，但水位线推进。
+	before, _ := os.ReadFile(path)
+	fake.text = "NOOP"
+	if err := d.Dream(context.Background(), someHistory(20)); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := os.ReadFile(path)
+	if string(before) != string(after) {
+		t.Fatalf("NOOP 不应改动文件：%q → %q", before, after)
+	}
+	if d.seen() != 20 {
+		t.Fatalf("NOOP 后水位线也应推进到 20，得到 %d", d.seen())
 	}
 
 	// 原子写不留临时文件。
@@ -119,6 +133,29 @@ func TestDreamWritesAndRewritesMemory(t *testing.T) {
 		if strings.HasSuffix(e.Name(), ".tmp") {
 			t.Fatalf("不应残留临时文件：%s", e.Name())
 		}
+	}
+}
+
+func TestDreamMigratesLegacyMemory(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "memory.md")
+	if err := os.WriteFile(path, []byte("用户喜欢用 uv 管 Python\n零散旧笔记"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeLLM{text: "ADD py-env | 用 uv 管理 Python 环境"}
+	d := NewDreamer(DreamConfig{Model: "m", MemoryPath: path}, fake)
+
+	if err := d.Dream(context.Background(), someHistory(10)); err != nil {
+		t.Fatal(err)
+	}
+	// 旧自由文本喂给了梦。
+	if !strings.Contains(fake.lastReq.Messages[0].Text, "uv 管 Python") {
+		t.Fatal("legacy 内容应喂给梦")
+	}
+	// 收编后旧文本谢幕，新文件全条目化。
+	b, _ := os.ReadFile(path)
+	if strings.Contains(string(b), "零散旧笔记") || !strings.Contains(string(b), "- [py-env]") {
+		t.Fatalf("legacy 迁移错误：%q", b)
 	}
 }
 

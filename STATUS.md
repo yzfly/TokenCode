@@ -36,7 +36,7 @@
 - **会话持久化**：每拍结束把新留下的历史追加进 `$XDG_DATA_HOME/tokencode/sessions/YYYY/MM/DD/<id>.jsonl`（append-only，崩溃安全，半行损坏自动跳过）；`-continue` 继续当前目录最近会话、`-resume <id>` 指定恢复、`-no-session` 关闭；心跳空转拍剔除后不落盘（水位线机制）。
 - **Event 即拍**：用户消息、心跳、梦醒是同一个 `Event` 原语的不同来源，agent 是消费 `chan Event` 的 actor，所有 turn 串行（单写者）。
 - **心跳**（`-heartbeat 30m` 显式开启）：三级短路省 token——L0 本地检查零 token → L1 空转回哨兵 `HEARTBEAT_OK` 即从历史剔除 → L2 真有事才完整跑；非交互 turn 只读放行、写类拒绝。
-- **自动做梦**：空闲 ∧ 有料双条件触发，独立 goroutine 调一次 LLM 把会话压缩成 `.tokencode/memory.md`，system prompt 注入「长期记忆」——重启也记得。
+- **自动做梦（ACE 式增量 playbook）**：空闲 ∧ 有料双条件触发，独立 goroutine 调一次 LLM。记忆是条目化 playbook（`.tokencode/memory.md`，每条 `- [id] 内容`）：梦（Reflector）只输出增量操作 `ADD/UPDATE/DELETE/NOOP`（提示词要求洞察锚定可验证证据——测试结果、退出码、工具报错，拒绝无证据印象），Go 确定性合并（Curator）应用操作——LLM 永不重写整个文件，一次坏梦最多污染几条（context collapse 防线）；条目上限 60、最近更新在前、溢出淘汰最久未碰的；单梦最多 8 操作；NOOP 不碰文件但推进水位线；旧自由格式记忆首梦自动收编成条目。system prompt 注入 playbook——反馈（工具证据）→ 记忆（条目化提炼）→ 策略更新（注入下一拍）闭环成形，重启也记得。
 - Bubble Tea TUI（alt-screen + viewport）：glamour markdown 每条渲染一次进缓存、DeepSeek 蓝主题、亮/暗自适应、鼠标滚轮滚动、字符 logo + 欢迎卡、等待时 spinner。
 - 权限四模式：**plan**（只读）/ **review**（逐次 y/n/a 确认，默认）/ **auto**（小模型按规则裁决）/ **yolo**（全放行）；Shift+Tab 循环或 `/plan` `/review` `/auto` `/yolo` 切换。
 - **权限规则三表（CC 语法，团队治理地基）**：config.json 的 `permissions` + 项目级 `.tokencode/permissions.json`（合并取并集）声明 `allow`/`ask`/`deny`——`read`、`bash(git log *)`、`agent(explore)`、`mcp__server__*` 这类规则；bash 复合命令拆段逐判（任一段 deny 即 deny、全段 allow 才 allow、命令替换段永不 allow）。优先级 deny > plan 只读铁律 > ask（yolo/auto 也强制人工确认）> allow > 模式默认；deny 在 TUI/headless/serve/IM 通道全入口生效。与 `.tokencode/permissions.md`（auto 裁决器的自然语言软提示）并存分工。
