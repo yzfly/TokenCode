@@ -9,6 +9,7 @@ import (
 
 	"github.com/yzfly/tokencode/internal/agent"
 	"github.com/yzfly/tokencode/internal/permrules"
+	"github.com/yzfly/tokencode/internal/tools"
 )
 
 // 在 worker goroutine 与 Bubble Tea 事件循环之间传递的消息类型。
@@ -116,7 +117,7 @@ func (b *bridge) gateTool(label, name string, input json.RawMessage) bool {
 	b.prog.Send(toolCallMsg{label, name, input})
 	rd := b.rules.Evaluate(name, input)
 	if b.src != agent.SourceUser {
-		return name == "read" && rd != permrules.Deny // v1 从严：非交互 turn 只许只读
+		return tools.ReadOnly(name) && rd != permrules.Deny // v1 从严：非交互 turn 只许只读
 	}
 	switch resolveGate(rd, b.perms.decide(name)) {
 	case gateAllow:

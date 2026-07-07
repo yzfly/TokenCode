@@ -22,7 +22,7 @@ import (
 )
 
 // DefaultAllowed 是无人确认时默认放行的只读类工具白名单。
-var DefaultAllowed = []string{"read", "websearch", "webfetch"}
+var DefaultAllowed = []string{"read", "ls", "glob", "grep", "git_status", "git_diff", "websearch", "webfetch"}
 
 // Allow 把白名单与 yolo 合成一个裁决函数（yolo 全放行）。
 func Allow(allowed []string, yolo bool) func(name string) bool {

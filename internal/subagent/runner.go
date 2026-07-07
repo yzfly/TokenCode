@@ -6,6 +6,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync"
 
 	"github.com/yzfly/tokencode/internal/agent"
 	"github.com/yzfly/tokencode/internal/llm"
@@ -18,8 +19,12 @@ const (
 	maxConcurrent    = 8
 )
 
-// nestedTools 是子代理注册表里剔除的工具（禁止嵌套生成子代理/工作流）。
-var nestedTools = map[string]bool{"agent": true, "workflow": true}
+// nestedTools 是子代理注册表里剔除的工具（禁止嵌套生成子代理/工作流，
+// 异步四件套同理）。
+var nestedTools = map[string]bool{
+	"agent": true, "workflow": true,
+	"spawn_agent": true, "wait_agent": true, "resume_agent": true, "list_agents": true,
+}
 
 // Runner 装配并运行子代理。外壳（TUI/plain）启动时注入 UI 工厂，
 // 子代理的工具调用经它走与主 agent 相同的权限与显示通道。
@@ -33,6 +38,11 @@ type Runner struct {
 
 	defs []Def
 	sem  chan struct{}
+
+	// 异步子代理句柄表（spawn_agent/wait_agent/resume_agent/list_agents）。
+	jobMu  sync.Mutex
+	jobs   map[string]*Job
+	jobSeq int
 }
 
 // NewRunner 创建子代理运行器。
@@ -102,14 +112,29 @@ func (r *Runner) SpawnDef(ctx context.Context, def Def, prompt string, opts Spaw
 		}
 	}
 
+	sub, ui, label, err := r.assemble(def, opts)
+	if err != nil {
+		return "", err
+	}
+	final, err := runOnce(ctx, sub, ui, prompt)
+	if err != nil {
+		return "", fmt.Errorf("子代理 %s: %w", label, err)
+	}
+	return final, nil
+}
+
+// assemble 装配一个子代理实例：解析模型覆盖、建工具子集注册表、系统提示、
+// UI 通道。装配与执行分离——异步句柄（resume_agent）要在多拍之间保住同一个
+// 子代理实例。
+func (r *Runner) assemble(def Def, opts SpawnOpts) (*agent.Agent, agent.UI, string, error) {
 	client, model := r.Client()
 	if def.Model != "" {
 		if r.Resolve == nil {
-			return "", fmt.Errorf("子代理 %s 指定了模型 %q 但当前不支持模型解析", def.Name, def.Model)
+			return nil, agent.UI{}, "", fmt.Errorf("子代理 %s 指定了模型 %q 但当前不支持模型解析", def.Name, def.Model)
 		}
 		c, m, err := r.Resolve(def.Model)
 		if err != nil {
-			return "", fmt.Errorf("子代理 %s 解析模型 %q: %w", def.Name, def.Model, err)
+			return nil, agent.UI{}, "", fmt.Errorf("子代理 %s 解析模型 %q: %w", def.Name, def.Model, err)
 		}
 		client, model = c, m
 	}
@@ -138,6 +163,11 @@ func (r *Runner) SpawnDef(ctx context.Context, def Def, prompt string, opts Spaw
 	case r.UI != nil:
 		ui = r.UI(label)
 	}
+	return sub, ui, label, nil
+}
+
+// runOnce 在装配好的子代理上跑一拍，返回最终文本。
+func runOnce(ctx context.Context, sub *agent.Agent, ui agent.UI, prompt string) (string, error) {
 	var final string
 	prev := ui.OnAssistant
 	ui.OnAssistant = func(s string) { // 每段都覆盖，留下最后一段
@@ -147,7 +177,7 @@ func (r *Runner) SpawnDef(ctx context.Context, def Def, prompt string, opts Spaw
 		}
 	}
 	if err := sub.Run(ctx, prompt, ui); err != nil {
-		return "", fmt.Errorf("子代理 %s: %w", label, err)
+		return "", err
 	}
 	if strings.TrimSpace(final) == "" {
 		return "（子代理结束，无文本输出）", nil

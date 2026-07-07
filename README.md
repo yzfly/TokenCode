@@ -16,7 +16,7 @@
 
 ## 它是什么
 
-一个跑在终端里的编码 agent：你说一句话，它用 `read` / `write` / `edit` / `bash` / `websearch` / `webfetch` 工具读改文件、跑命令、查资料，循环直到把活干完。流式输出、会话自动落盘（`-continue` 随时接着聊）、可委托子代理与 JS 工作流编排。核心是标准的 tool-use 循环：
+一个跑在终端里的编码 agent：你说一句话，它用 `read` / `write` / `edit` / `bash`、`ls` / `glob` / `grep`（文件检索）、`git_status` / `git_diff` / `git_commit`（git 专用）、`websearch` / `webfetch`（联网）工具读改文件、跑命令、查资料，循环直到把活干完。流式输出、会话自动落盘（`-continue` 随时接着聊）、可同步（`agent` / `workflow`）或异步（`spawn_agent` / `wait_agent` / `resume_agent` / `list_agents`）委托子代理与 JS 工作流编排，还能用 `cron_create` 注册会话内定时任务。核心是标准的 tool-use 循环：
 
 ```
 用户消息 → LLM(带工具) → tool_use → 执行 → tool_result 回灌 → 循环 → 结束
@@ -85,7 +85,7 @@ Shift+Tab 循环切换，或用 `/plan` `/review` `/auto` `/yolo`；`/exit` 或 
 | `-w` | — | 在隔离 git worktree 里干活：`<repo>/.tokencode/worktrees/<name>`（分支 `tokencode/wt-<name>`，基于 HEAD；同名复用；非 git 仓库报错）。退出**不**自动删，验收后手动 `git worktree remove` 清理；状态栏显示 `wt:<name>` 标记 |
 | `-p` | — | headless：跑一个 turn 后退出（`-p "任务"`，或管道 `echo 任务 \| tokencode -p`） |
 | `-output` | `text` | headless 输出格式：`text` / `json` / `stream-json`（JSONL 事件流，仅 `-p` 下有效） |
-| `-allowed-tools` | `read,websearch,webfetch` | headless 工具白名单（逗号分隔）；白名单外直接拒绝，`-yolo` 全放行 |
+| `-allowed-tools` | `read,ls,glob,grep,git_status,git_diff,websearch,webfetch` | headless 工具白名单（逗号分隔）；白名单外直接拒绝，`-yolo` 全放行 |
 
 ### Headless 与 HTTP API
 

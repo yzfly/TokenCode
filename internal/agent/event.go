@@ -14,6 +14,7 @@ const (
 	SourceUser      EventSource = "user"      // 用户输入（交互式，允许阻塞确认）
 	SourceHeartbeat EventSource = "heartbeat" // 周期心跳
 	SourceDream     EventSource = "dream"     // 梦醒通知
+	SourceCron      EventSource = "cron"      // 定时任务到点（cron_create 注册）
 )
 
 // Sentinel 是空转哨兵：Ephemeral 事件的最终回复等于它时，
@@ -81,9 +82,9 @@ func (a *Agent) serveOne(ctx context.Context, ev Event, ui UI) {
 		}
 	}
 
-	// 非用户拍按 Event 来源记账（heartbeat/dream），结束后还原。
+	// 非用户拍按 Event 来源记账（heartbeat/dream/cron），结束后还原。
 	// turn 串行（单写者不变量），换/还原不会与其它拍交错。
-	if ev.Source == SourceHeartbeat || ev.Source == SourceDream {
+	if ev.Source != SourceUser {
 		prev := a.swapUsageSource(string(ev.Source))
 		defer a.swapUsageSource(prev)
 	}

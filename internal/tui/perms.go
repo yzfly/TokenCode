@@ -4,6 +4,7 @@ import (
 	"sync"
 
 	"github.com/yzfly/tokencode/internal/permrules"
+	"github.com/yzfly/tokencode/internal/tools"
 )
 
 // permMode 是权限模式。循环顺序 plan → review → auto → yolo → plan。
@@ -62,12 +63,13 @@ func (p *perms) rememberAlways(tool string) {
 	p.mu.Unlock()
 }
 
-// decide 裁决一次工具调用。read 永远放行；其余看模式。
+// decide 裁决一次工具调用。只读工具（read/ls/glob/grep/git_status/git_diff…）
+// 永远放行；其余看模式。
 // auto 与 review 同样返回 permConfirm——由 bridge 决定确认走人还是走小模型。
 func (p *perms) decide(tool string) permDecision {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if tool == "read" {
+	if tools.ReadOnly(tool) {
 		return permAllow
 	}
 	switch p.mode {

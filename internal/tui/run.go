@@ -22,6 +22,7 @@ import (
 	"github.com/yzfly/tokencode/internal/race"
 	"github.com/yzfly/tokencode/internal/skill"
 	"github.com/yzfly/tokencode/internal/subagent"
+	"github.com/yzfly/tokencode/internal/tools"
 )
 
 // Options 是外壳的装配参数。
@@ -151,7 +152,7 @@ func runPlain(ag *agent.Agent, opts Options) error {
 			return agent.UI{
 				OnToolCall: func(name string, input json.RawMessage) bool {
 					fmt.Printf("  → [%s] %s %s\n", label, name, oneLine(compactJSON(input), 120))
-					return !denied(name, input) && (yolo || name == "read")
+					return !denied(name, input) && (yolo || tools.ReadOnly(name))
 				},
 			}
 		}
@@ -178,7 +179,7 @@ func runPlain(ag *agent.Agent, opts Options) error {
 		OnToolCall: func(name string, input json.RawMessage) bool {
 			fmt.Printf("  → %s %s\n", name, oneLine(compactJSON(input), 120))
 			// 非交互：deny 规则先拒，再只读放行，其余除非 -yolo 否则拒绝。
-			return !denied(name, input) && (yolo || name == "read")
+			return !denied(name, input) && (yolo || tools.ReadOnly(name))
 		},
 		OnToolResult: func(name, result string, isErr bool) {
 			mark := "✓"

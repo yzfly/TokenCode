@@ -9,6 +9,18 @@ import (
 	"sync"
 )
 
+// readOnlyTools 是只读工具集：不改文件、不改外部状态，权限层可免确认放行
+// （plan 模式、非交互拍、headless 默认白名单共用这一份判定）。
+var readOnlyTools = map[string]bool{
+	"read": true, "ls": true, "glob": true, "grep": true,
+	"git_status": true, "git_diff": true,
+	"websearch": true, "webfetch": true,
+	"cron_list": true, "list_agents": true,
+}
+
+// ReadOnly 报告工具是否只读（对文件系统与外部世界无副作用）。
+func ReadOnly(name string) bool { return readOnlyTools[name] }
+
 // Tool 是 agent 可调用的一个能力。
 type Tool interface {
 	Name() string

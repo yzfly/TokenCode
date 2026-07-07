@@ -100,6 +100,8 @@ func assembleHeadless(cfg config.Config, modelName, baseURLFlag string, maxToken
 	}
 	reg := tools.NewRegistry()
 	for _, t := range []tools.Tool{tools.Read(), tools.Write(), tools.Edit(), tools.Bash(),
+		tools.Ls(), tools.Glob(), tools.Grep(),
+		tools.GitStatus(), tools.GitDiff(), tools.GitCommit(),
 		tools.WebSearch(), tools.WebFetch()} {
 		reg.Add(headless.GateToolRules(t, allow, rules))
 	}

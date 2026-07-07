@@ -16,6 +16,7 @@ import (
 	"github.com/yzfly/tokencode/internal/agent"
 	"github.com/yzfly/tokencode/internal/checkpoint"
 	"github.com/yzfly/tokencode/internal/config"
+	"github.com/yzfly/tokencode/internal/cron"
 	"github.com/yzfly/tokencode/internal/headless"
 	"github.com/yzfly/tokencode/internal/hooks"
 	"github.com/yzfly/tokencode/internal/llm"
@@ -138,7 +139,19 @@ func main() {
 	}
 
 	reg := tools.NewRegistry(tools.Read(), tools.Write(), tools.Edit(), tools.Bash(),
+		tools.Ls(), tools.Glob(), tools.Grep(),
+		tools.GitStatus(), tools.GitDiff(), tools.GitCommit(),
 		tools.WebSearch(), tools.WebFetch())
+
+	// 事件队列先于工具装配建好：cron 工具到点要往里投拍（与心跳/梦同一原语）。
+	events := make(chan agent.Event, 1)
+	cronMgr := cron.NewManager(func(name, prompt string) {
+		events <- agent.Event{Source: agent.SourceCron, Text: fmt.Sprintf("[定时任务 %s] %s", name, prompt)}
+	})
+	defer cronMgr.Close()
+	for _, t := range cron.Tools(cronMgr) {
+		reg.Add(t)
+	}
 
 	// 文件检查点（/rewind）：write/edit 写盘前快照原内容。启动时顺手清理
 	// 7 天前的旧会话目录；本会话目录退出不删，留给用户翻旧账。
@@ -173,6 +186,9 @@ func main() {
 	}
 	reg.Add(subagent.NewTool(runner))
 	reg.Add(workflow.NewTool(runner))
+	for _, t := range subagent.AsyncTools(runner) {
+		reg.Add(t)
+	}
 
 	// MCP server 后台连接（绝不阻塞启动）；技能只读 frontmatter，启动开销极小。
 	var mcpMgr *mcp.Manager
@@ -214,7 +230,6 @@ func main() {
 		}
 	}
 
-	events := make(chan agent.Event, 1)
 	idle := pulse.NewIdleTracker()
 	var pl *pulse.Pulse
 	if *heartbeat > 0 {

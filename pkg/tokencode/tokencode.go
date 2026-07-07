@@ -66,11 +66,14 @@ const (
 // DefaultMaxTokens 是未经 WithMaxTokens 配置时的输出上限，与 CLI 默认一致。
 const DefaultMaxTokens = 4096
 
-// DefaultTools 返回内置工具全家桶：read / write / edit / bash / websearch / webfetch。
+// DefaultTools 返回内置工具全家桶：read / write / edit / bash、
+// ls / glob / grep、git_status / git_diff / git_commit、websearch / webfetch。
 // 每次调用返回新实例，可安全用于多个 Client。
 func DefaultTools() []Tool {
 	return []Tool{
 		tools.Read(), tools.Write(), tools.Edit(), tools.Bash(),
+		tools.Ls(), tools.Glob(), tools.Grep(),
+		tools.GitStatus(), tools.GitDiff(), tools.GitCommit(),
 		tools.WebSearch(), tools.WebFetch(),
 	}
 }
